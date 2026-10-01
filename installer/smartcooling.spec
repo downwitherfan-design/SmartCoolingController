@@ -44,6 +44,13 @@ hiddenimports = [
     "cryptography.hazmat.backends.openssl",
     "pyqtgraph",
     "app._build",
+    # pyqtgraph resolves these two at runtime with importlib.import_module()
+    # (pyqtgraph/Qt/OpenGLHelpers.py, widgets/RawImageWidget.py, and the
+    # PlotCurveItem import chain), so PyInstaller's static analysis never sees
+    # them.  Without them the frozen app dies at start-up with
+    # "No module named 'PySide6.QtOpenGL'".  They are small; ship them.
+    "PySide6.QtOpenGL",
+    "PySide6.QtOpenGLWidgets",
 ]
 hiddenimports += collect_submodules("websockets")
 
@@ -76,7 +83,6 @@ excluded_qt = [
     "PySide6.QtMultimedia",
     "PySide6.QtMultimediaWidgets",
     "PySide6.QtNfc",
-    "PySide6.QtOpenGLWidgets",
     "PySide6.QtPdf",
     "PySide6.QtPdfWidgets",
     "PySide6.QtPositioning",

@@ -174,8 +174,7 @@ Double-click **`build_windows.bat`**. It locates a supported Python, creates
 (lint → tests → freeze → verify). The executable lands in
 `build\\dist\\SmartCoolingController\\SmartCoolingController.exe`.
 
-> Requires 64-bit **Python 3.11–3.13**. Python 3.14 is not supported yet — the
-> pinned PySide6 6.8.1 publishes no wheels for it.
+> Requires 64-bit **Python 3.11–3.14**.
 
 ### Manual / Linux
 
