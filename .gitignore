@@ -24,6 +24,7 @@ dist_wheel/
 
 # Generated build stamp
 app/_build.py
+installer/version_info.txt
 
 # OS / editor noise
 .DS_Store
