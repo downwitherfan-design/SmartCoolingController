@@ -30,6 +30,7 @@ import hashlib
 import platform
 import shutil
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -87,9 +88,42 @@ def _zip_tree(source: Path, target: Path, *, arc_prefix: str = "") -> int:
             if _excluded(relative):
                 continue
             arcname = f"{arc_prefix}/{relative}" if arc_prefix else str(relative)
-            archive.write(path, arcname)
+            data = _normalise_line_endings(path)
+            if data is None:
+                archive.write(path, arcname)
+            else:
+                info = zipfile.ZipInfo(arcname, date_time=_dos_time(path.stat().st_mtime))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o644 << 16
+                archive.writestr(info, data)
             written += 1
     return written
+
+
+def _normalise_line_endings(path: Path) -> bytes | None:
+    """Return rewritten bytes for Windows batch files, else ``None``.
+
+    ``cmd.exe`` requires CRLF line endings in ``.bat``/``.cmd`` files; a file
+    committed from a Unix checkout has bare LF and Windows closes it the
+    instant it is launched.  The source tree is shared across platforms, so we
+    normalise these two extensions when building the archive instead of
+    forcing a CRLF file into the repository.
+    """
+    if path.suffix.lower() not in {".bat", ".cmd"}:
+        return None
+    return path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+
+
+def _dos_time(timestamp: float) -> tuple[int, int, int, int, int, int]:
+    local = time.localtime(timestamp)
+    return (
+        local.tm_year,
+        local.tm_mon,
+        local.tm_mday,
+        local.tm_hour,
+        local.tm_min,
+        local.tm_sec,
+    )
 
 
 def _human(size: int) -> str:

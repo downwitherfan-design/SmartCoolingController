@@ -103,6 +103,26 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
   `interactive=` and skips `QMessageBox` when running `--headless`, because a
   modal dialog with no user to dismiss it hangs the process.
 
+## Packaging
+
+- **Windows `.bat`/`.cmd` files must ship with CRLF.** `cmd.exe` closes an
+  LF-only batch file the instant it is launched (the window "opens and
+  immediately closes"), and the repository is authored on Linux, so the
+  deliver packager rewrites these two extensions to CRLF when it builds the
+  source archive (`_normalise_line_endings` in `scripts/package/deliver.py`).
+  `.gitattributes` pins them to `eol=crlf` as well. Do not remove either: the
+  regression is invisible on Linux and only bites Windows users.
+- **Root-only excludes.** `build/`, `dist/`, `.venv/` and `.git/` are excluded
+  only when they are the first path component; matching "build" anywhere drops
+  `scripts/build/` from the source archive. `tests/unit/test_packaging.py`
+  guards both rules.
+- **PyInstaller hidden imports for runtime `importlib`.** pyqtgraph resolves
+  `PySide6.QtOpenGL` / `QtOpenGLWidgets` at runtime via `importlib.import_module`,
+  which static analysis cannot see; both are in `hiddenimports` in
+  `installer/smartcooling.spec`. A missing one aborts the frozen bundle at
+  start-up while the source tree runs fine — always rebuild and run the frozen
+  smoke-test after touching the spec.
+
 ## Environment notes
 
 - The Linux CI container needs system `libegl1` / `libgl1` for PySide6 +

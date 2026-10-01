@@ -1,0 +1,13 @@
+# Windows batch files must use CRLF: cmd.exe closes an LF-only .bat the
+# instant it is launched.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell scripts and Python stay LF so they run unchanged on Linux/macOS.
+*.sh text eol=lf
+*.py text eol=lf
+
+# Binary artefacts are never touched.
+*.png binary
+*.ico binary
+*.zip binary
