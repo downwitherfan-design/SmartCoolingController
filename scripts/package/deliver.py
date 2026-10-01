@@ -214,6 +214,11 @@ Double-click **`build_windows.bat`**. It locates a supported Python, creates
 > If the window closes instantly, open a Command Prompt in the folder and run
 > `build_windows.bat` so the message stays on screen.
 
+> **The first run downloads ~150 MB of wheels once.** They are cached in a
+> repo-local `wheelhouse/` and `.pip-cache/` beside the project, so a second
+> run needs no network at all and rebuilds in seconds. Keep those two folders
+> when you move the project and the build stays offline.
+
 ### شروع سریع روی ویندوز (فارسی)
 
 1. فایل `SmartCoolingController-{version}-source.zip` را از حالت فشرده خارج کنید.
@@ -230,6 +235,11 @@ Double-click **`build_windows.bat`**. It locates a supported Python, creates
 
 > اگر پنجرهٔ `build_windows.bat` بلافاصله بسته شد، از داخل پوشه یک Command
 > Prompt باز کنید و `build_windows.bat` را دستی اجرا کنید تا پیام خطا بماند.
+
+> **بار اول حدود ۱۵۰ مگابایت فایل نصبی دانلود می‌شود (فقط یک‌بار).** این
+> فایل‌ها در دو پوشهٔ `wheelhouse` و `.pip-cache` کنار پروژه ذخیره می‌شوند؛
+> اجرای بعدی هیچ دانلودی ندارد و در چند ثانیه تمام می‌شود. اگر پروژه را جابه‌جا
+> می‌کنید، این دو پوشه را هم همراه آن ببرید تا ساخت آفلاین بماند.
 
 ### Manual / Linux
 
