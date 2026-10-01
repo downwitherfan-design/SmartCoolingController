@@ -1,0 +1,108 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smartcooling-controller"
+version = "1.0.0"
+description = "Windows-side telemetry and control application for an intelligent laptop cooling pad (ESP32 + 4-wire PWM fan)."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { file = "LICENSE.txt" }
+authors = [{ name = "SmartCooling" }]
+keywords = ["telemetry", "hardware-monitoring", "esp32", "pwm", "cooling", "pyside6"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+    "Topic :: System :: Monitoring",
+]
+dependencies = [
+    "PySide6==6.8.1",
+    "pyqtgraph==0.13.7",
+    # pyqtgraph imports numpy unconditionally for its plotting primitives; it is
+    # an undeclared transitive dependency, so we pin it explicitly.
+    "numpy==2.5.3",
+    "psutil==6.1.1",
+    "websockets==14.1",
+    "pydantic==2.10.4",
+    "cryptography==44.0.0",
+]
+
+[project.optional-dependencies]
+build = [
+    "pyinstaller==6.11.1",
+    "pytest==8.3.4",
+    "pytest-qt==4.4.0",
+    "pytest-asyncio==0.25.0",
+    "ruff==0.8.6",
+    "mypy==1.14.1",
+]
+
+[project.scripts]
+smartcooling = "run:main"
+
+[tool.setuptools]
+# ``run.py`` is the console-script entry point; ship it as a top-level module.
+py-modules = ["run"]
+
+[tool.setuptools.packages.find]
+# Explicit discovery: ``app`` and every subpackage, including the
+# ``localization`` namespace package.  A bare ``packages = ["app"]`` would ship
+# only the top-level module and silently drop 14 subpackages.
+include = ["app*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"app" = ["py.typed", "resources/**/*", "localization/**/*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["."]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "PIE", "RET", "BLE"]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "B008",   # function calls in argument defaults are used deliberately
+    "SIM108", # ternary is not always clearer
+    "RUF001", # allow unicode (degree sign, em dash) in strings
+    "RUF002",
+    "RUF003",
+    "RUF022", # __all__ is grouped by layer, not alphabetised, on purpose
+    "UP042",  # our own StrEnum gives identical behaviour on 3.10+
+    "B027",   # close() is a deliberate no-op default on the back-end ABC
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+# Fault-isolation boundaries: a hardware back-end, the event bus, the network
+# layer and the persistence writer must never let a third-party or OS failure
+# crash the application, so they catch broad exceptions on purpose.
+"app/core/events.py" = ["BLE001"]
+"app/core/logging_setup.py" = ["BLE001"]
+"app/hardware/*" = ["BLE001"]
+"app/network/*" = ["BLE001"]
+"app/protocol/*" = ["BLE001"]
+"app/telemetry/engine.py" = ["BLE001"]
+"app/persistence/*" = ["BLE001"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = false
+ignore_missing_imports = true
+check_untyped_defs = true
