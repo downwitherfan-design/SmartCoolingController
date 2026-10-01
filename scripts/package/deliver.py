@@ -208,7 +208,28 @@ Double-click **`build_windows.bat`**. It locates a supported Python, creates
 (lint → tests → freeze → verify). The executable lands in
 `build\\dist\\SmartCoolingController\\SmartCoolingController.exe`.
 
-> Requires 64-bit **Python 3.11–3.14**.
+> Requires 64-bit **Python 3.11–3.14**. If the script reports
+> "No supported Python found", install Python from
+> <https://www.python.org/downloads/> and tick **"Add python.exe to PATH"**.
+> If the window closes instantly, open a Command Prompt in the folder and run
+> `build_windows.bat` so the message stays on screen.
+
+### شروع سریع روی ویندوز (فارسی)
+
+1. فایل `SmartCoolingController-{version}-source.zip` را از حالت فشرده خارج کنید.
+2. مطمئن شوید **Python ۳.۱۱ تا ۳.۱۴ (۶۴ بیتی)** نصب است و گزینهٔ
+   «Add python.exe to PATH» هنگام نصب تیک خورده باشد.
+3. روی فایل **`build_windows.bat`** دوبار کلیک کنید.
+4. اسکریپت خودش محیط مجازی می‌سازد، وابستگی‌ها را نصب می‌کند و کل مراحل
+   (بررسی کد → تست → ساخت → بازبینی) را اجرا می‌کند.
+5. خروجی نهایی اینجاست:
+   `build\\dist\\SmartCoolingController\\SmartCoolingController.exe`
+6. برای اجرا همان `SmartCoolingController.exe` را دوبار کلیک کنید؛ در نخستین
+   اجرا جادوگر راه‌اندازی باز می‌شود و حالت «سخت‌افزار شبیه‌سازی‌شده» را پیشنهاد
+   می‌دهد تا بدون سخت‌افزار برنامه را ببینید.
+
+> اگر پنجرهٔ `build_windows.bat` بلافاصله بسته شد، از داخل پوشه یک Command
+> Prompt باز کنید و `build_windows.bat` را دستی اجرا کنید تا پیام خطا بماند.
 
 ### Manual / Linux
 
