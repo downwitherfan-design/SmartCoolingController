@@ -105,13 +105,23 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
 
 ## Packaging
 
-- **Windows `.bat`/`.cmd` files must ship with CRLF.** `cmd.exe` closes an
-  LF-only batch file the instant it is launched (the window "opens and
-  immediately closes"), and the repository is authored on Linux, so the
-  deliver packager rewrites these two extensions to CRLF when it builds the
-  source archive (`_normalise_line_endings` in `scripts/package/deliver.py`).
-  `.gitattributes` pins them to `eol=crlf` as well. Do not remove either: the
-  regression is invisible on Linux and only bites Windows users.
+- **`build_windows.bat` uses a flat, `goto`-based structure on purpose.**
+  `cmd.exe` parses a whole parenthesised block up front, so a single unescaped
+  unbalanced `(` inside an `if (` / `for ... do (` block aborts the entire
+  script with `Mismatch in parentheses.` — the window "opens and immediately
+  closes". This was the real cause of the one-click launcher failing (verified
+  by running the file under real `cmd.exe`); the earlier CRLF theory was not.
+  Keep every statement at top level, branch with `goto`, and if a literal `(`
+  must appear in an `echo`, escape it as `^(`. `tests/unit/test_packaging.py`
+  guards both the flat structure and the balanced parentheses.
+- **Windows `.bat`/`.cmd` files must still ship with CRLF.** `cmd.exe` also
+  closes an LF-only batch file the instant it is launched, and the repository is
+  authored on Linux, so the deliver packager rewrites these two extensions to
+  CRLF when it builds the source archive (`_normalise_line_endings` in
+  `scripts/package/deliver.py`). `.gitattributes` pins them to `eol=crlf` as
+  well. Do not remove either: the regression is invisible on Linux and only
+  bites Windows users. Note that editing a `.bat` on Linux can silently strip
+  the CRLF from the working copy — re-check `\r\n` before committing.
 - **Root-only excludes.** `build/`, `dist/`, `.venv/` and `.git/` are excluded
   only when they are the first path component; matching "build" anywhere drops
   `scripts/build/` from the source archive. `tests/unit/test_packaging.py`

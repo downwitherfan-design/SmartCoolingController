@@ -101,3 +101,58 @@ def test_build_output_is_excluded_only_at_root() -> None:
 )
 def test_generated_paths_are_excluded(relative: Path) -> None:
     assert deliver._excluded(relative)
+
+
+# ---------------------------------------------------------------------------
+# build_windows.bat — the one-click Windows launcher.
+#
+# cmd.exe parses an entire parenthesised block up front.  A single unescaped,
+# unbalanced "(" anywhere inside such a block aborts the whole script with
+# "Mismatch in parentheses." — the file opens and closes instantly, which is
+# exactly the failure users reported.  The checks below lock down the two
+# properties that keep that from happening: CRLF endings and clean parens.
+# ---------------------------------------------------------------------------
+
+_LAUNCHER = ROOT / "build_windows.bat"
+
+
+def _unescaped(text: str) -> str:
+    """Strip cmd caret escapes so only *active* parentheses remain."""
+    return text.replace("^(", "").replace("^)", "")
+
+
+def test_launcher_is_shipped_with_crlf() -> None:
+    payload = _LAUNCHER.read_bytes()
+    assert b"\r\n" in payload
+    assert payload.count(b"\n") == payload.count(b"\r\n")
+
+
+def test_launcher_has_no_unbalanced_line() -> None:
+    text = _LAUNCHER.read_text(encoding="utf-8")
+    for number, line in enumerate(text.splitlines(), start=1):
+        active = _unescaped(line)
+        # A line may legitimately *open* a block (trailing "(") or *close* one
+        # (a lone ")"); every other line must carry balanced parentheses.
+        stripped = active.rstrip()
+        if stripped.endswith("(") and stripped.count("(") == 1 and stripped.count(")") == 0:
+            continue
+        if stripped == ")":
+            continue
+        assert active.count("(") == active.count(")"), (
+            f"build_windows.bat:{number} has unbalanced parentheses: {line!r}"
+        )
+
+
+def test_launcher_parens_are_globally_balanced() -> None:
+    active = _unescaped(_LAUNCHER.read_text(encoding="utf-8"))
+    assert active.count("(") == active.count(")")
+
+
+def test_launcher_has_no_fragile_nested_blocks() -> None:
+    # The launcher deliberately uses flat, top-level statements plus "goto"
+    # instead of nested "if (...)" / "for ... do (...)" blocks, so no line can
+    # ever be swallowed by cmd.exe's block parser.
+    for number, line in enumerate(_LAUNCHER.read_text(encoding="utf-8").splitlines(), 1):
+        stripped = line.strip().lower()
+        assert not stripped.startswith("for "), f"nested for-block at line {number}"
+        assert not stripped.endswith("("), f"unexpected block opener at line {number}"
