@@ -22,6 +22,10 @@ build/
 dist/
 dist_wheel/
 
+# One-click Windows build caches (big wheels; never ship or commit)
+.pip-cache/
+wheelhouse/
+
 # Generated build stamp
 app/_build.py
 installer/version_info.txt

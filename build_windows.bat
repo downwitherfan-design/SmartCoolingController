@@ -7,6 +7,12 @@ echo   SmartCooling Controller - Windows build
 echo ============================================================
 echo.
 
+rem --- 0. persistent caches so the big wheels download once ----
+rem The Qt/numpy wheels are ~150 MB.  Keep a repo-local pip cache and a
+rem wheelhouse beside the project so a second build is fast and offline.
+set "PIP_CACHE_DIR=%CD%\.pip-cache"
+set "WHEELHOUSE=%CD%wheelhouse"
+
 rem --- 1. locate a supported interpreter (3.11 - 3.14) ----------
 rem Flat structure on purpose: nested parenthesised blocks are
 rem fragile across cmd.exe versions, so each probe is a top-level
@@ -31,17 +37,17 @@ if defined PYCMD goto found_python
 goto no_python
 
 :found_python
-echo [1/4] Interpreter: %PYCMD%
+echo [1/5] Interpreter: %PYCMD%
 %PYCMD% --version
 echo.
 
-rem --- 2. virtual environment -----------------------------------
+rem --- 2. virtual environment (reused when already present) -----
 if not exist ".venv\Scripts\python.exe" goto make_venv
-echo [2/4] Reusing existing .venv
+echo [2/5] Reusing existing .venv
 goto have_venv
 
 :make_venv
-echo [2/4] Creating virtual environment (.venv)...
+echo [2/5] Creating virtual environment (.venv)...
 %PYCMD% -m venv .venv
 if errorlevel 1 goto fail_venv
 
@@ -49,18 +55,46 @@ if errorlevel 1 goto fail_venv
 set "VENV_PY=%CD%\.venv\Scripts\python.exe"
 echo.
 
-rem --- 3. pinned dependencies -----------------------------------
-echo [3/4] Installing pinned dependencies...
+rem --- 3. pinned dependencies, cache + wheelhouse first ---------
+echo [3/5] Installing pinned dependencies (cache: %PIP_CACHE_DIR%)...
+if not exist "%PIP_CACHE_DIR%" mkdir "%PIP_CACHE_DIR%"
+
+rem Fast path: if everything is already importable, skip the network entirely.
+"%VENV_PY%" -c "import PySide6, pyqtgraph, psutil, websockets, pydantic, cryptography, PyInstaller, pytest" >nul 2>&1
+if not errorlevel 1 goto deps_ok
+echo       cache miss - resolving dependencies
+
+rem Try the local wheelhouse first so a re-run needs no network at all.
+if not exist "%WHEELHOUSE%" goto pip_online
+"%VENV_PY%" -m pip install --no-index --find-links "%WHEELHOUSE%" -r requirements-build.txt
+if not errorlevel 1 goto deps_ok
+echo       wheelhouse incomplete - fetching what is missing
+
+:pip_online
 "%VENV_PY%" -m pip install --upgrade pip
 if errorlevel 1 goto fail_pip
-"%VENV_PY%" -m pip install -r requirements-build.txt
+
+rem Download every wheel into the wheelhouse once, then install from it.
+"%VENV_PY%" -m pip download -r requirements-build.txt -d "%WHEELHOUSE%"
 if errorlevel 1 goto fail_deps
+
+"%VENV_PY%" -m pip install --no-index --find-links "%WHEELHOUSE%" -r requirements-build.txt
+if errorlevel 1 goto fail_deps
+
+:deps_ok
+echo       dependencies ready
 echo.
 
 rem --- 4. build: lint + tests + freeze + verify -----------------
-echo [4/4] Building (lint, tests, freeze, verify)...
+echo [4/5] Building (lint, tests, freeze, verify)...
 "%VENV_PY%" scripts\build\build.py --release
 if errorlevel 1 goto fail_build
+
+rem --- 5. optional one-click installer (Inno Setup) -------------
+echo.
+echo [5/5] Packaging installer...
+"%VENV_PY%" scripts\package\release.py --release
+if errorlevel 1 goto installer_missing
 
 echo.
 echo ============================================================
@@ -68,9 +102,22 @@ echo   BUILD COMPLETE
 echo ============================================================
 echo   Executable:
 echo     %CD%\build\dist\SmartCoolingController\SmartCoolingController.exe
+echo   Installer:
+echo     %CD%\build\installer\SmartCoolingController-1.0.0-setup.exe
 echo.
-echo   Optional installer (needs Inno Setup 6):
-echo     "%VENV_PY%" scripts\package\release.py --release
+pause
+exit /b 0
+
+:installer_missing
+echo.
+echo ============================================================
+echo   BUILD COMPLETE (no installer)
+echo ============================================================
+echo   The frozen app was built and verified, but the Inno Setup
+echo   step did not run.  Install Inno Setup 6 from
+echo   https://jrsoftware.org/isdl.php and re-run this script,
+echo   or use the portable bundle:
+echo     %CD%\build\dist\SmartCoolingController\SmartCoolingController.exe
 echo.
 pause
 exit /b 0

@@ -241,6 +241,12 @@ def _install_signal_handlers(app, log):
         signal.signal(signal.SIGINT, _handle)
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, _handle)
+        # Windows has no real SIGTERM: ``Popen.send_signal(SIGTERM)`` maps to
+        # TerminateProcess (an ungraceful kill) and CTRL_C is unreliable for a
+        # process in its own group, so the console-level CTRL_BREAK_EVENT
+        # (``signal.SIGBREAK``) is the one signal that reaches us cleanly there.
+        if hasattr(signal, "SIGBREAK"):
+            signal.signal(signal.SIGBREAK, _handle)
     except (ValueError, OSError):  # pragma: no cover - non-main thread on some platforms
         log.debug("signal handlers were not installed")
 

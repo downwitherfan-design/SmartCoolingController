@@ -35,6 +35,32 @@ def _env(tmp_path: Path) -> dict[str, str]:
     }
 
 
+def _popen_kwargs() -> dict[str, object]:
+    """Extra ``Popen`` flags needed to deliver a console signal on Windows.
+
+    A process started with ``CREATE_NEW_PROCESS_GROUP`` can receive
+    ``CTRL_BREAK_EVENT``; without the flag Windows delivers no console signal at
+    all and the only way to stop the child is an ungraceful ``TerminateProcess``.
+    """
+    if os.name == "nt":  # pragma: no cover - exercised on Windows only
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {}
+
+
+def _stop_gracefully(process: subprocess.Popen) -> None:
+    """Send the platform's *interrupt* signal, not an ungraceful kill.
+
+    On POSIX that is ``SIGTERM``.  On Windows ``send_signal(SIGTERM)`` calls
+    ``TerminateProcess`` — the process dies instantly with exit code 1 and no
+    teardown runs — so the honest equivalent is ``CTRL_BREAK_EVENT``, which the
+    entry point handles via ``signal.SIGBREAK``.
+    """
+    if os.name == "nt":  # pragma: no cover - exercised on Windows only
+        process.send_signal(signal.CTRL_BREAK_EVENT)
+    else:
+        process.send_signal(signal.SIGTERM)
+
+
 def test_version_flag_prints_and_exits_cleanly(tmp_path: Path) -> None:
     result = subprocess.run(
         [sys.executable, "-m", "run", "--version"],
@@ -88,6 +114,7 @@ def test_sigterm_during_startup_is_graceful(tmp_path: Path) -> None:
         stderr=subprocess.STDOUT,
         text=True,
         env=_env(tmp_path),
+        **_popen_kwargs(),
     )
     try:
         time.sleep(6.0)
@@ -95,11 +122,11 @@ def test_sigterm_during_startup_is_graceful(tmp_path: Path) -> None:
             "the app exited during start-up:\n"
             + (process.stdout.read() if process.stdout else "")
         )
-        process.send_signal(signal.SIGTERM)
+        _stop_gracefully(process)
         try:
             process.wait(timeout=25)
         except subprocess.TimeoutExpired:
-            pytest.fail("the app did not shut down within 25s of SIGTERM")
+            pytest.fail("the app did not shut down within 25s of the interrupt")
         assert process.returncode == 0, (
             f"unclean shutdown ({process.returncode}):\n"
             + (process.stdout.read() if process.stdout else "")
@@ -127,6 +154,7 @@ def test_sigterm_during_main_loop_runs_the_window_teardown(tmp_path: Path) -> No
         stderr=subprocess.STDOUT,
         text=True,
         env=_env(tmp_path),
+        **_popen_kwargs(),
     )
     try:
         deadline = time.time() + 25
@@ -135,11 +163,11 @@ def test_sigterm_during_main_loop_runs_the_window_teardown(tmp_path: Path) -> No
         assert process.poll() is None, "the app exited during start-up"
         assert marker.exists(), "the app never armed its crash guard"
 
-        process.send_signal(signal.SIGTERM)
+        _stop_gracefully(process)
         try:
             process.wait(timeout=25)
         except subprocess.TimeoutExpired:
-            pytest.fail("the app did not shut down within 25s of SIGTERM")
+            pytest.fail("the app did not shut down within 25s of the interrupt")
 
         assert process.returncode == 0, (
             f"unclean shutdown ({process.returncode}):\n"

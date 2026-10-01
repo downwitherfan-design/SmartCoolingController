@@ -90,6 +90,15 @@ def test_build_output_is_excluded_only_at_root() -> None:
     assert not deliver._excluded(Path("scripts/build/verify_frozen.py"))
 
 
+def test_windows_build_caches_are_excluded_at_root() -> None:
+    # The one-click build keeps ~150 MB of wheels in these two directories;
+    # they must never bloat the source archive.
+    assert deliver._excluded(Path(".pip-cache/http-v2/x.body"))
+    assert deliver._excluded(Path("wheelhouse/PySide6-6.11.2-cp39-abi3-win_amd64.whl"))
+    # Only at the root: a nested directory with the same name is real source.
+    assert not deliver._excluded(Path("scripts/wheelhouse/keep.py"))
+
+
 @pytest.mark.parametrize(
     "relative",
     [

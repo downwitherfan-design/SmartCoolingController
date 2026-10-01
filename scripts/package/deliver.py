@@ -46,7 +46,7 @@ DELIVERY = BUILD / "delivery"
 #: and virtual environments.  They must not match nested source packages such
 #: as ``scripts/build`` — the earlier "match anywhere" rule silently dropped
 #: the build scripts from the source archive.
-_ROOT_EXCLUDES = {"build", ".git", "dist", ".venv", "venv"}
+_ROOT_EXCLUDES = {"build", ".git", "dist", ".venv", "venv", ".pip-cache", "wheelhouse"}
 #: Cache directories excluded wherever they appear.
 _ANY_EXCLUDES = {"__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
 _SOURCE_EXCLUDE_SUFFIXES = (".egg-info", ".pyc", ".pyo")

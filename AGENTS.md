@@ -102,6 +102,20 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
 - Never use modal dialogs on a head-less path: `_install_excepthook` takes
   `interactive=` and skips `QMessageBox` when running `--headless`, because a
   modal dialog with no user to dismiss it hangs the process.
+- **Windows has no real `SIGTERM`.** `Popen.send_signal(SIGTERM)` calls
+  `TerminateProcess`, which kills the child instantly with exit code 1 and runs
+  no teardown; `CTRL_C_EVENT` is unreliable for a child in its own process
+  group. The one console signal that reaches the process cleanly is
+  `CTRL_BREAK_EVENT`, so the entry point registers `signal.SIGBREAK` and
+  `tests/ui/test_entrypoint.py` signals through `_stop_gracefully()` /
+  `_popen_kwargs()` (`CREATE_NEW_PROCESS_GROUP`). Do not "simplify" these back
+  to a bare `SIGTERM` — the tests then fail only on Windows.
+- **The in-process mock ESP32 must be listening before `enable_mock` returns.**
+  `ConnectionManager.enable_mock` starts the loop, then starts the server and
+  waits for it to bind; starting the server only "if the loop is already
+  running" races loop start-up and loses on slower machines (Windows), leaving
+  the caller to connect to a refused port. `ConnectionManager.stop` closes the
+  mock server so the port is released.
 
 ## Packaging
 
@@ -114,6 +128,13 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
   Keep every statement at top level, branch with `goto`, and if a literal `(`
   must appear in an `echo`, escape it as `^(`. `tests/unit/test_packaging.py`
   guards both the flat structure and the balanced parentheses.
+- **`build_windows.bat` keeps its wheels.** The Qt/numpy stack is ~150 MB, so
+  the script points `PIP_CACHE_DIR` at a repo-local `.pip-cache/`, downloads
+  every wheel into a repo-local `wheelhouse/` once, and installs with
+  `--no-index --find-links` on later runs. It also skips the network entirely
+  when the venv already imports the pinned stack. Both directories are
+  git-ignored and excluded from the source archive (`_ROOT_EXCLUDES`) — never
+  commit or ship them.
 - **Windows `.bat`/`.cmd` files must still ship with CRLF.** `cmd.exe` also
   closes an LF-only batch file the instant it is launched, and the repository is
   authored on Linux, so the deliver packager rewrites these two extensions to

@@ -152,9 +152,16 @@ class ConnectionManager:
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
-        if self._loop is not None and self._loop.is_running():
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            mock = self._mock
+            if mock is not None:
+                with contextlib.suppress(RuntimeError):
+                    future = asyncio.run_coroutine_threadsafe(mock.stop(), loop)
+                    with contextlib.suppress(Exception):
+                        future.result(timeout=timeout)
             with contextlib.suppress(RuntimeError):
-                self._loop.call_soon_threadsafe(lambda: None)
+                loop.call_soon_threadsafe(lambda: None)
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=timeout)
@@ -206,11 +213,21 @@ class ConnectionManager:
     # -- mock hosting ------------------------------------------------------
 
     def enable_mock(self, *, host: str = "127.0.0.1", port: int = 8765) -> DiscoveredDevice:
-        """Start an in-process mock controller and return its device handle."""
+        """Start an in-process mock controller and return its device handle.
+
+        The server is started on the connection thread's event loop and this
+        call does not return until the socket is actually listening, so the
+        caller may connect immediately without racing the loop start-up.  The
+        previous version only started the server when the loop happened to be
+        running already; on a slower machine (Windows) the loop had not come up
+        yet, the server was silently never started, and the connection then
+        failed with "connection refused".
+        """
         mock = MockEsp32(host=host, port=port)
         self._mock = mock
-        if self._loop is not None and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(mock.start(), self._loop)
+        self.start()
+        if not self._start_mock_server(mock):
+            raise RuntimeError("the connection loop did not come up; mock ESP32 not listening")
         return DiscoveredDevice(
             device_id=mock.device_id,
             host=host,
@@ -219,6 +236,22 @@ class ConnectionManager:
             firmware_version=mock.firmware,
             is_mock=True,
         )
+
+    def _start_mock_server(self, mock: MockEsp32, timeout: float = 10.0) -> bool:
+        """Run ``mock.start()`` on the connection loop and wait until it is bound."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            loop = self._loop
+            if loop is not None and loop.is_running():
+                future = asyncio.run_coroutine_threadsafe(mock.start(), loop)
+                try:
+                    future.result(timeout=timeout)
+                except Exception:
+                    _log.exception("mock ESP32 failed to start")
+                    return False
+                return True
+            time.sleep(0.02)
+        return False
 
     # -- metrics for the telemetry engine ----------------------------------
 
