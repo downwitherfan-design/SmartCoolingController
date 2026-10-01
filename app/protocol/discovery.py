@@ -131,7 +131,7 @@ class UdpDiscovery:
             hostname = socket.gethostname()
             for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
                 address = info[4][0]
-                if address and not address.startswith("127."):
+                if isinstance(address, str) and address and not address.startswith("127."):
                     targets.append(address)
         return targets
 

@@ -85,6 +85,8 @@ class AlertsPage(Page):
     def reload(self) -> None:
         while self.list_layout.count():
             layout_item = self.list_layout.takeAt(0)
+            if layout_item is None:
+                continue
             widget = layout_item.widget()
             if widget is not None:
                 widget.deleteLater()

@@ -1,9 +1,11 @@
 # SmartCooling Controller - runtime dependencies (pinned)
-PySide6==6.8.1
-pyqtgraph==0.13.7
-# pyqtgraph imports numpy unconditionally; pin the exact verified build.
-numpy==2.5.3
-psutil==6.1.1
-websockets==14.1
-pydantic==2.10.4
-cryptography==44.0.0
+# Versions chosen to publish wheels for every supported interpreter,
+# Python 3.11 through 3.14 (cp311-abi3 Qt, cp311+ crypto, etc.).
+PySide6==6.11.2
+pyqtgraph==0.14.0
+# pyqtgraph imports numpy unconditionally; 2.4.6 has wheels for 3.11-3.14.
+numpy==2.4.6
+psutil==7.2.2
+websockets==17.1
+pydantic==2.13.5
+cryptography==50.0.2

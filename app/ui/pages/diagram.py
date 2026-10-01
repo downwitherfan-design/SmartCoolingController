@@ -65,6 +65,8 @@ class DiagramPage(Page):
     def _build_detail_rows(self, key: str) -> None:
         while self.detail_body.count():
             item = self.detail_body.takeAt(0)
+            if item is None:
+                continue
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()

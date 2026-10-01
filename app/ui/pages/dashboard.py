@@ -353,6 +353,8 @@ class DashboardPage(ScrollPage):
     def _render_alerts(self) -> None:
         while self.alerts_list.count():
             item = self.alerts_list.takeAt(0)
+            if item is None:
+                continue
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()

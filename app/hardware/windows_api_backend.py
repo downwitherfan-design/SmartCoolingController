@@ -99,7 +99,7 @@ class WindowsApiBackend(HardwareMonitorBackend):
             import ctypes
 
             class _PowerStatus(ctypes.Structure):
-                _fields_ = [  # noqa: RUF012 - ctypes struct convention
+                _fields_ = [
                     ("ACLineStatus", ctypes.c_ubyte),
                     ("BatteryFlag", ctypes.c_ubyte),
                     ("BatteryLifePercent", ctypes.c_ubyte),

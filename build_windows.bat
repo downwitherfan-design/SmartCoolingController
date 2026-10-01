@@ -7,22 +7,22 @@ echo   SmartCooling Controller - Windows build
 echo ============================================================
 echo.
 
-rem --- 1. locate a supported interpreter (3.11 - 3.13) -------------
-rem The pinned runtime (PySide6 6.8.1) has no wheels for Python 3.14,
-rem so we look for a supported version through the py launcher first.
+rem --- 1. locate a supported interpreter (3.11 - 3.14) -------------
+rem Try the py launcher first (newest supported version wins), then fall
+rem back to whatever "python" resolves to on PATH.
 set "PYCMD="
-for %%V in (3.13 3.12 3.11) do (
+for %%V in (3.14 3.13 3.12 3.11) do (
     if not defined PYCMD (
         py -%%V -c "import sys" >nul 2>&1 && set "PYCMD=py -%%V"
     )
 )
 if not defined PYCMD (
-    python -c "import sys; sys.exit(0 if (3,11)<=sys.version_info[:2]<(3,14) else 1)" >nul 2>&1 && set "PYCMD=python"
+    python -c "import sys; sys.exit(0 if (3,11)<=sys.version_info[:2]<(3,15) else 1)" >nul 2>&1 && set "PYCMD=python"
 )
 if not defined PYCMD (
     echo [ERROR] No supported Python found.
     echo.
-    echo   Install 64-bit Python 3.11, 3.12 or 3.13 from
+    echo   Install 64-bit Python 3.11 - 3.14 from
     echo   https://www.python.org/downloads/ and tick
     echo   "Add python.exe to PATH" during setup.
     echo.
