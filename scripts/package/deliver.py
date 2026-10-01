@@ -57,6 +57,10 @@ _SOURCE_EXCLUDES = {
 }
 _SOURCE_EXCLUDE_SUFFIXES = (".egg-info", ".pyc", ".pyo")
 
+#: Individual generated files that must not enter the source archive even
+#: though they live inside a shipped package (the build re-creates them).
+_SOURCE_EXCLUDE_FILES = {"_build.py"}
+
 #: Metadata files copied verbatim from ``build/`` when they exist.
 _METADATA = ("manifest.json", "checksums.txt", "RELEASE_NOTES.md")
 
@@ -71,6 +75,8 @@ def sha256(path: Path) -> str:
 
 def _excluded(relative: Path) -> bool:
     if any(part in _SOURCE_EXCLUDES for part in relative.parts):
+        return True
+    if relative.name in _SOURCE_EXCLUDE_FILES:
         return True
     return any(part.endswith(_SOURCE_EXCLUDE_SUFFIXES) for part in relative.parts)
 
