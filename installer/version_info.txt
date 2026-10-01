@@ -22,7 +22,7 @@ VSVersionInfo(
          StringStruct('OriginalFilename', 'SmartCoolingController.exe'),
          StringStruct('ProductName', 'SmartCooling Controller'),
          StringStruct('ProductVersion', '1.0.0'),
-         StringStruct('Comments', 'build fa20c9e')]),
+         StringStruct('Comments', 'build a05a43a')]),
     ]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])]),
   ],
