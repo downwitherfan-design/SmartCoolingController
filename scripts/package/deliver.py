@@ -41,20 +41,13 @@ BUILD = ROOT / "build"
 BUNDLE = BUILD / "dist" / "SmartCoolingController"
 DELIVERY = BUILD / "delivery"
 
-#: Directories that must never enter the source archive.  ``build`` holds the
-#: delivery output itself, the caches are machine-local, and ``.git`` would
-#: bloat the archive with history the recipient can fetch separately.
-_SOURCE_EXCLUDES = {
-    ".git",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    "__pycache__",
-    "build",
-    ".venv",
-    "venv",
-    "dist",
-}
+#: Directories excluded only at the archive root: build output, VCS metadata
+#: and virtual environments.  They must not match nested source packages such
+#: as ``scripts/build`` — the earlier "match anywhere" rule silently dropped
+#: the build scripts from the source archive.
+_ROOT_EXCLUDES = {"build", ".git", "dist", ".venv", "venv"}
+#: Cache directories excluded wherever they appear.
+_ANY_EXCLUDES = {"__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
 _SOURCE_EXCLUDE_SUFFIXES = (".egg-info", ".pyc", ".pyo")
 
 #: Individual generated files that must not enter the source archive even
@@ -74,7 +67,9 @@ def sha256(path: Path) -> str:
 
 
 def _excluded(relative: Path) -> bool:
-    if any(part in _SOURCE_EXCLUDES for part in relative.parts):
+    if relative.parts and relative.parts[0] in _ROOT_EXCLUDES:
+        return True
+    if any(part in _ANY_EXCLUDES for part in relative.parts):
         return True
     if relative.name in _SOURCE_EXCLUDE_FILES:
         return True
@@ -170,7 +165,19 @@ tests keep their runs isolated.
 
 ## Building from source
 
-The source archive pins every dependency, so the build is reproducible:
+The source archive pins every dependency, so the build is reproducible.
+
+### Windows (one click)
+
+Double-click **`build_windows.bat`**. It locates a supported Python, creates
+`.venv`, installs the pinned dependencies and runs the full build
+(lint → tests → freeze → verify). The executable lands in
+`build\\dist\\SmartCoolingController\\SmartCoolingController.exe`.
+
+> Requires 64-bit **Python 3.11–3.13**. Python 3.14 is not supported yet — the
+> pinned PySide6 6.8.1 publishes no wheels for it.
+
+### Manual / Linux
 
 ```sh
 python -m pip install -r requirements-build.txt
@@ -182,6 +189,10 @@ On a head-less Linux machine install the graphics libraries PySide6 needs:
 ```sh
 sudo apt-get install -y --no-install-recommends libegl1 libgl1
 ```
+
+> The frozen bundle is platform-specific: a build made on Linux runs on Linux,
+> a build made on Windows runs on Windows. PyInstaller cannot cross-compile, so
+> build on the platform you intend to ship.
 
 ## Support
 

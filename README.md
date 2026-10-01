@@ -58,6 +58,11 @@ python scripts/build/build.py            # preflight, lint, tests, freeze, verif
 python scripts/build/build.py --release  # stamp a release build id
 ```
 
+On Windows, double-click **`build_windows.bat`** to do all of the above in one
+step. It requires 64-bit Python 3.11–3.13 (Python 3.14 has no PySide6 6.8.1
+wheels). The frozen bundle is platform-specific — PyInstaller cannot
+cross-compile, so build on the platform you intend to ship.
+
 The build writes to `build/dist/SmartCoolingController` and then runs
 `scripts/build/verify_frozen.py`, which launches the real executable in
 head-less mode and checks `--version`, a full UI start/stop and the data tree.
