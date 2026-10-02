@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from common import ROOT, app_metadata
+from common import app_metadata, git
 
 #: Conventional-commit type → section heading.  Order defines the output order.
 SECTIONS: tuple[tuple[str, str], ...] = (
@@ -72,41 +72,17 @@ class Commit:
         return f"**{scope}**: {text}" if scope else text
 
 
-def _run_git(args: list[str], timeout: float):
-    """Run ``git`` and return the completed process, or ``None`` if git is absent.
-
-    A source archive is unpacked on machines that have no git at all (and no
-    ``.git`` directory).  ``subprocess`` raises ``FileNotFoundError`` (an
-    ``OSError``) in that case, which used to crash the whole release pipeline.
-    Treating it as "no history available" lets packaging finish; the notes then
-    simply say so instead of failing.
-    """
-    import subprocess
-
-    try:
-        return subprocess.run(
-            args,
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
 def _git_log(since: str | None) -> list[Commit]:
     fmt = f"%h{_FIELD_SEP}%s{_FIELD_SEP}%b{_RECORD_SEP}"
-    command = ["git", "log", f"--pretty=format:{fmt}"]
+    args = ["log", f"--pretty=format:{fmt}"]
     if since:
-        command.append(f"{since}..HEAD")
+        args.append(f"{since}..HEAD")
 
-    result = _run_git(command, timeout=30)
-    if result is None or result.returncode != 0 or not result.stdout.strip():
+    output = git(*args, timeout=30)
+    if not output.strip():
         return []
     commits: list[Commit] = []
-    for record in result.stdout.split(_RECORD_SEP):
+    for record in output.split(_RECORD_SEP):
         record = record.strip("\n")
         if not record:
             continue
@@ -120,10 +96,7 @@ def _git_log(since: str | None) -> list[Commit]:
 
 
 def last_tag() -> str | None:
-    result = _run_git(["git", "describe", "--tags", "--abbrev=0"], timeout=15)
-    if result is None or result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
+    return git("describe", "--tags", "--abbrev=0", timeout=15) or None
 
 
 def render(commits: list[Commit], *, version: str, protocol: int, since: str | None) -> str:

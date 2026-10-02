@@ -93,6 +93,13 @@ rem Inno Setup step, release notes and checksums.  It is called with
 rem --skip-installer so a machine without Inno Setup 6 still finishes
 rem with a verified, runnable bundle instead of stopping at a missing
 rem compiler.
+rem
+rem Guard against a stale checkout: if the scripts folder is older than
+rem this launcher it predates the fixes above, and the build would fail
+rem with a confusing traceback.  Detect it here and say so plainly.
+findstr /C:"--skip-installer" "scripts\package\release.py" >nul 2>&1
+if errorlevel 1 goto stale_tree
+
 echo [4/4] Building (lint, tests, freeze, verify)...
 "%VENV_PY%" scripts\package\release.py --release --skip-installer
 if errorlevel 1 goto fail_build
@@ -112,6 +119,22 @@ echo     "%VENV_PY%" scripts\installer\build_installer.py --release
 echo.
 pause
 exit /b 0
+
+:stale_tree
+echo.
+echo ============================================================
+echo   [ERROR] THIS IS AN OUTDATED COPY OF THE SOURCE
+echo ============================================================
+echo   build_windows.bat is newer than the scripts\ folder next to it,
+echo   so this folder still contains the old, unfixed build scripts.
+echo   Running it would fail with a "FileNotFoundError: git" traceback
+echo   even though nothing is actually wrong with your machine.
+echo.
+echo   Fix: delete this folder and unpack the latest source archive
+echo   again, then run build_windows.bat from the fresh copy.
+echo.
+pause
+exit /b 1
 
 :no_python
 echo [ERROR] No supported Python found.

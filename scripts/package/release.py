@@ -80,7 +80,10 @@ def main(argv: list[str] | None = None) -> int:
 
     print("[3/4] release notes")
     notes_path = BUILD_DIR / "RELEASE_NOTES.md"
-    run([python(), str(NOTES), "--output", str(notes_path)])
+    # Notes are a nicety, not a build gate: a failure here (no git, an odd
+    # history, a future regression) must never discard a verified bundle.
+    if run([python(), str(NOTES), "--output", str(notes_path)], check=False) != 0:
+        print("      release notes step failed; continuing without them", file=sys.stderr)
 
     print("[4/4] checksums and manifest")
     artefacts = [path for path in (installer_path,) if path is not None]

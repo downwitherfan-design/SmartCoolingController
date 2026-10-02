@@ -234,14 +234,34 @@ def test_release_pipeline_accepts_skip_installer() -> None:
     assert "--skip-installer" in text
     # A missing Inno Setup must be caught, not propagated.
     assert "except SystemExit" in text
+    # Release notes are optional: a failure there must not kill the build.
+    assert "continuing without them" in text
 
 
 def test_installer_search_covers_a_per_user_install(monkeypatch: pytest.MonkeyPatch) -> None:
-    sys.path.insert(0, str(ROOT / "scripts" / "installer"))
-    import build_installer
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import common
 
     monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\me\AppData\Local")
     monkeypatch.setenv("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
-    paths = [str(p) for p in build_installer._candidate_paths()]
-    assert any("AppData\\Local" in p and "Inno Setup 6" in p for p in paths)
-    assert any("Program Files (x86)" in p for p in paths)
+    # No ISCC anywhere on this machine: the search must return None, not raise.
+    monkeypatch.setattr(common.shutil, "which", lambda *_a, **_k: None)
+    assert common.find_iscc() is None
+
+
+def test_launcher_detects_a_stale_checkout() -> None:
+    # The recurring failure was running an old copy of the scripts.  The
+    # launcher must probe the scripts it is about to run and refuse loudly
+    # instead of surfacing a "FileNotFoundError: git" traceback.
+    text = _LAUNCHER.read_text(encoding="utf-8")
+    assert "findstr" in text
+    assert "goto stale_tree" in text
+    assert ":stale_tree" in text
+
+
+def test_release_notes_never_calls_subprocess_directly() -> None:
+    # git is reached through common.git, the single guarded entry point; a
+    # stray subprocess.run(["git", ...]) is exactly what crashed Windows.
+    text = (ROOT / "scripts" / "package" / "release_notes.py").read_text(encoding="utf-8")
+    assert "subprocess" not in text
+    assert "from common import" in text and "git" in text

@@ -16,53 +16,27 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
-import shutil
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from common import ROOT, build_info, is_windows, run, write_json
+from common import ROOT, build_info, find_iscc, is_windows, run, write_json
 
 BUNDLE = ROOT / "build" / "dist" / "SmartCoolingController"
 ISS = ROOT / "installer" / "smartcooling.iss"
 OUTPUT_DIR = ROOT / "build" / "installer"
 
-#: Common install locations for Inno Setup 6.
-_CANDIDATES = (
-    r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-    r"C:\Program Files\Inno Setup 6\ISCC.exe",
-)
 
-
-def _candidate_paths() -> list[Path]:
-    """Common install locations for Inno Setup 6, including a per-user install."""
-    candidates = [Path(p) for p in _CANDIDATES]
-    local = os.environ.get("LOCALAPPDATA")
-    if local:
-        candidates.append(Path(local) / "Programs" / "Inno Setup 6" / "ISCC.exe")
-    program_files = os.environ.get("PROGRAMFILES(X86)") or os.environ.get("PROGRAMFILES")
-    if program_files:
-        candidates.append(Path(program_files) / "Inno Setup 6" / "ISCC.exe")
-    return candidates
-
-
-def find_iscc(explicit: str | None) -> Path:
-    if explicit:
-        path = Path(explicit)
-        if not path.exists():
-            raise SystemExit(f"ISCC not found at {path}")
-        return path
-    found = shutil.which("ISCC") or shutil.which("iscc")
-    if found:
-        return Path(found)
-    for candidate in _candidate_paths():
-        if candidate.exists():
-            return candidate
-    raise SystemExit(
-        "Inno Setup 6 (ISCC.exe) was not found.  Install it from "
-        "https://jrsoftware.org/isdl.php or pass --iscc <path>."
-    )
+def locate_iscc(explicit: str | None) -> Path:
+    """Return ``ISCC.exe`` or fail with an actionable message."""
+    iscc = find_iscc(explicit)
+    if iscc is None:
+        raise SystemExit(
+            "Inno Setup 6 (ISCC.exe) was not found.  Install it from "
+            "https://jrsoftware.org/isdl.php or pass --iscc <path>."
+        )
+    return iscc
 
 
 def sha256(path: Path) -> str:
@@ -90,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     info = build_info(release=args.release)
-    iscc = find_iscc(args.iscc)
+    iscc = locate_iscc(args.iscc)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"compiling installer for {info.version} (build {info.build_id})")
