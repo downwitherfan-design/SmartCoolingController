@@ -219,6 +219,13 @@ Double-click **`build_windows.bat`**. It locates a supported Python, creates
 > run needs no network at all and rebuilds in seconds. Keep those two folders
 > when you move the project and the build stays offline.
 
+> **Neither git nor Inno Setup is required.** On a machine without git the
+> release notes simply record no commits; without Inno Setup the optional
+> `setup.exe` step is skipped and the portable executable is still produced and
+> verified. If you later want a full installer, install Inno Setup 6 from
+> <https://jrsoftware.org/isdl.php> and run
+> `scripts\\installer\\build_installer.py --release`.
+
 ### شروع سریع روی ویندوز (فارسی)
 
 1. فایل `SmartCoolingController-{version}-source.zip` را از حالت فشرده خارج کنید.
@@ -240,6 +247,13 @@ Double-click **`build_windows.bat`**. It locates a supported Python, creates
 > فایل‌ها در دو پوشهٔ `wheelhouse` و `.pip-cache` کنار پروژه ذخیره می‌شوند؛
 > اجرای بعدی هیچ دانلودی ندارد و در چند ثانیه تمام می‌شود. اگر پروژه را جابه‌جا
 > می‌کنید، این دو پوشه را هم همراه آن ببرید تا ساخت آفلاین بماند.
+
+> **نیازی به git یا Inno Setup نیست.** اگر git نصب نباشد، بخش «تغییرات نسخه»
+> فقط خالی می‌ماند؛ اگر Inno Setup نصب نباشد، مرحلهٔ اختیاری ساخت `setup.exe`
+> رد می‌شود و همان فایل اجرایی portable ساخته و بازبینی می‌شود. اگر بعداً
+> نصب‌کنندهٔ کامل خواستید، Inno Setup 6 را از
+> <https://jrsoftware.org/isdl.php> نصب کنید و سپس این را اجرا کنید:
+> `scripts\\installer\\build_installer.py --release`
 
 ### Manual / Linux
 
