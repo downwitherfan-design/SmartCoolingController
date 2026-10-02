@@ -135,6 +135,14 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
   when the venv already imports the pinned stack. Both directories are
   git-ignored and excluded from the source archive (`_ROOT_EXCLUDES`) — never
   commit or ship them.
+- **Git and ISCC are reached through exactly one guarded helper each.**
+  `common.git()` returns `""` when git is absent and is the *only* place a git
+  subprocess may be spawned — a stray `subprocess.run(["git", ...])` in a script
+  is what crashed Windows twice. `common.find_iscc()` is the single ISCC lookup,
+  shared by `build_windows.bat`'s pipeline and the installer builder. If a build
+  fails with `FileNotFoundError: git` while the scripts look fixed, the user is
+  running a *stale checkout*: `build_windows.bat` now probes for
+  `--skip-installer` and stops with an explicit "outdated copy" message.
 - **Packaging must survive a machine without git or Inno Setup.** A source
   archive is unpacked on a Windows box that has neither. `release_notes.py`
   must catch `FileNotFoundError` (an `OSError`) from `subprocess` and degrade to
