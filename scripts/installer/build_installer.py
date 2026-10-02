@@ -35,6 +35,18 @@ _CANDIDATES = (
 )
 
 
+def _candidate_paths() -> list[Path]:
+    """Common install locations for Inno Setup 6, including a per-user install."""
+    candidates = [Path(p) for p in _CANDIDATES]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidates.append(Path(local) / "Programs" / "Inno Setup 6" / "ISCC.exe")
+    program_files = os.environ.get("PROGRAMFILES(X86)") or os.environ.get("PROGRAMFILES")
+    if program_files:
+        candidates.append(Path(program_files) / "Inno Setup 6" / "ISCC.exe")
+    return candidates
+
+
 def find_iscc(explicit: str | None) -> Path:
     if explicit:
         path = Path(explicit)
@@ -44,9 +56,9 @@ def find_iscc(explicit: str | None) -> Path:
     found = shutil.which("ISCC") or shutil.which("iscc")
     if found:
         return Path(found)
-    for candidate in _CANDIDATES:
-        if Path(candidate).exists():
-            return Path(candidate)
+    for candidate in _candidate_paths():
+        if candidate.exists():
+            return candidate
     raise SystemExit(
         "Inno Setup 6 (ISCC.exe) was not found.  Install it from "
         "https://jrsoftware.org/isdl.php or pass --iscc <path>."

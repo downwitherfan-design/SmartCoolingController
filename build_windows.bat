@@ -37,17 +37,17 @@ if defined PYCMD goto found_python
 goto no_python
 
 :found_python
-echo [1/5] Interpreter: %PYCMD%
+echo [1/4] Interpreter: %PYCMD%
 %PYCMD% --version
 echo.
 
 rem --- 2. virtual environment (reused when already present) -----
 if not exist ".venv\Scripts\python.exe" goto make_venv
-echo [2/5] Reusing existing .venv
+echo [2/4] Reusing existing .venv
 goto have_venv
 
 :make_venv
-echo [2/5] Creating virtual environment (.venv)...
+echo [2/4] Creating virtual environment (.venv)...
 %PYCMD% -m venv .venv
 if errorlevel 1 goto fail_venv
 
@@ -56,7 +56,7 @@ set "VENV_PY=%CD%\.venv\Scripts\python.exe"
 echo.
 
 rem --- 3. pinned dependencies, cache + wheelhouse first ---------
-echo [3/5] Installing pinned dependencies (cache: %PIP_CACHE_DIR%)...
+echo [3/4] Installing pinned dependencies (cache: %PIP_CACHE_DIR%)...
 if not exist "%PIP_CACHE_DIR%" mkdir "%PIP_CACHE_DIR%"
 
 rem Fast path: if everything is already importable, skip the network entirely.
@@ -83,18 +83,19 @@ if errorlevel 1 goto fail_deps
 
 :deps_ok
 echo       dependencies ready
+"%VENV_PY%" -m pip check
+if errorlevel 1 goto fail_deps
 echo.
 
-rem --- 4. build: lint + tests + freeze + verify -----------------
-echo [4/5] Building (lint, tests, freeze, verify)...
-"%VENV_PY%" scripts\build\build.py --release
+rem --- 4. build: lint + tests + freeze + verify + package ------
+rem The release pipeline runs the build once and then the optional
+rem Inno Setup step, release notes and checksums.  It is called with
+rem --skip-installer so a machine without Inno Setup 6 still finishes
+rem with a verified, runnable bundle instead of stopping at a missing
+rem compiler.
+echo [4/4] Building (lint, tests, freeze, verify)...
+"%VENV_PY%" scripts\package\release.py --release --skip-installer
 if errorlevel 1 goto fail_build
-
-rem --- 5. optional one-click installer (Inno Setup) -------------
-echo.
-echo [5/5] Packaging installer...
-"%VENV_PY%" scripts\package\release.py --release
-if errorlevel 1 goto installer_missing
 
 echo.
 echo ============================================================
@@ -102,22 +103,12 @@ echo   BUILD COMPLETE
 echo ============================================================
 echo   Executable:
 echo     %CD%\build\dist\SmartCoolingController\SmartCoolingController.exe
-echo   Installer:
-echo     %CD%\build\installer\SmartCoolingController-1.0.0-setup.exe
+echo   Manifest:
+echo     %CD%\build\manifest.json
 echo.
-pause
-exit /b 0
-
-:installer_missing
-echo.
-echo ============================================================
-echo   BUILD COMPLETE (no installer)
-echo ============================================================
-echo   The frozen app was built and verified, but the Inno Setup
-echo   step did not run.  Install Inno Setup 6 from
-echo   https://jrsoftware.org/isdl.php and re-run this script,
-echo   or use the portable bundle:
-echo     %CD%\build\dist\SmartCoolingController\SmartCoolingController.exe
+echo   For a full one-click installer (setup.exe) install Inno
+echo   Setup 6 from https://jrsoftware.org/isdl.php, then run:
+echo     "%VENV_PY%" scripts\installer\build_installer.py --release
 echo.
 pause
 exit /b 0

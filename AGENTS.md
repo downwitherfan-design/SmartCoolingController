@@ -135,6 +135,14 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
   when the venv already imports the pinned stack. Both directories are
   git-ignored and excluded from the source archive (`_ROOT_EXCLUDES`) — never
   commit or ship them.
+- **Packaging must survive a machine without git or Inno Setup.** A source
+  archive is unpacked on a Windows box that has neither. `release_notes.py`
+  must catch `FileNotFoundError` (an `OSError`) from `subprocess` and degrade to
+  "_No commits found_", never crash the pipeline; `build_windows.bat` calls
+  `scripts/package/release.py --release --skip-installer` so a missing
+  `ISCC.exe` cannot abort a build (it only skips the optional `setup.exe`), and
+  that is the *single* build invocation — calling `build.py` first would freeze
+  the app twice. `tests/unit/test_packaging.py` guards all three points.
 - **Windows `.bat`/`.cmd` files must still ship with CRLF.** `cmd.exe` also
   closes an LF-only batch file the instant it is launched, and the repository is
   authored on Linux, so the deliver packager rewrites these two extensions to

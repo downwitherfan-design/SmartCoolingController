@@ -165,3 +165,83 @@ def test_launcher_has_no_fragile_nested_blocks() -> None:
         stripped = line.strip().lower()
         assert not stripped.startswith("for "), f"nested for-block at line {number}"
         assert not stripped.endswith("("), f"unexpected block opener at line {number}"
+
+
+# ---------------------------------------------------------------------------
+# Packaging must survive a machine that has no git and no Inno Setup.
+#
+# A source archive is unpacked on a Windows box that has neither.  The release
+# pipeline used to crash twice there: ``release_notes`` called ``git`` through
+# ``subprocess`` and died with FileNotFoundError, and the missing Inno Setup
+# compiler aborted the whole packaging step.  Neither may take the build down.
+# ---------------------------------------------------------------------------
+
+
+def _import_release_notes():
+    sys.path.insert(0, str(ROOT / "scripts" / "package"))
+    import release_notes
+
+    return release_notes
+
+
+def test_release_notes_survive_a_missing_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess as _sp
+
+    release_notes = _import_release_notes()
+
+    def _missing_git(*_args, **_kwargs):
+        # Exactly what Windows raises when "git" is not on PATH.
+        raise FileNotFoundError(2, "The system cannot find the file specified", "git")
+
+    monkeypatch.setattr(_sp, "run", _missing_git)
+
+    assert release_notes.last_tag() is None
+    assert release_notes._git_log(None) == []
+    markdown = release_notes.render([], version="1.0.0", protocol=1, since=None)
+    assert "No commits found" in markdown
+
+
+def test_release_notes_cli_writes_a_file_without_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess as _sp
+
+    release_notes = _import_release_notes()
+
+    def _missing_git(*_args, **_kwargs):
+        raise FileNotFoundError(2, "The system cannot find the file specified", "git")
+
+    monkeypatch.setattr(_sp, "run", _missing_git)
+    output = tmp_path / "RELEASE_NOTES.md"
+
+    assert release_notes.main(["--output", str(output)]) == 0
+    assert output.is_file()
+    assert "SmartCooling Controller" in output.read_text(encoding="utf-8")
+
+
+def test_launcher_builds_once_through_the_release_pipeline() -> None:
+    # build_windows.bat used to run build.py and then release.py, which builds
+    # again — the freeze ran twice.  It now calls the release pipeline once and
+    # passes --skip-installer so a machine without Inno Setup still finishes.
+    text = _LAUNCHER.read_text(encoding="utf-8")
+    assert "scripts\\package\\release.py --release --skip-installer" in text
+    assert "scripts\\build\\build.py" not in text
+    assert "installer_missing" not in text
+
+
+def test_release_pipeline_accepts_skip_installer() -> None:
+    text = (ROOT / "scripts" / "package" / "release.py").read_text(encoding="utf-8")
+    assert "--skip-installer" in text
+    # A missing Inno Setup must be caught, not propagated.
+    assert "except SystemExit" in text
+
+
+def test_installer_search_covers_a_per_user_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    sys.path.insert(0, str(ROOT / "scripts" / "installer"))
+    import build_installer
+
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\me\AppData\Local")
+    monkeypatch.setenv("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
+    paths = [str(p) for p in build_installer._candidate_paths()]
+    assert any("AppData\\Local" in p and "Inno Setup 6" in p for p in paths)
+    assert any("Program Files (x86)" in p for p in paths)

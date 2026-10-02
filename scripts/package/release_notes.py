@@ -72,17 +72,38 @@ class Commit:
         return f"**{scope}**: {text}" if scope else text
 
 
+def _run_git(args: list[str], timeout: float):
+    """Run ``git`` and return the completed process, or ``None`` if git is absent.
+
+    A source archive is unpacked on machines that have no git at all (and no
+    ``.git`` directory).  ``subprocess`` raises ``FileNotFoundError`` (an
+    ``OSError``) in that case, which used to crash the whole release pipeline.
+    Treating it as "no history available" lets packaging finish; the notes then
+    simply say so instead of failing.
+    """
+    import subprocess
+
+    try:
+        return subprocess.run(
+            args,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def _git_log(since: str | None) -> list[Commit]:
     fmt = f"%h{_FIELD_SEP}%s{_FIELD_SEP}%b{_RECORD_SEP}"
     command = ["git", "log", f"--pretty=format:{fmt}"]
     if since:
         command.append(f"{since}..HEAD")
-    import subprocess
 
-    result = subprocess.run(
-        command, cwd=str(ROOT), capture_output=True, text=True, check=False, timeout=30
-    )
-    if result.returncode != 0 or not result.stdout.strip():
+    result = _run_git(command, timeout=30)
+    if result is None or result.returncode != 0 or not result.stdout.strip():
         return []
     commits: list[Commit] = []
     for record in result.stdout.split(_RECORD_SEP):
@@ -99,17 +120,10 @@ def _git_log(since: str | None) -> list[Commit]:
 
 
 def last_tag() -> str | None:
-    import subprocess
-
-    result = subprocess.run(
-        ["git", "describe", "--tags", "--abbrev=0"],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=15,
-    )
-    return result.stdout.strip() or None if result.returncode == 0 else None
+    result = _run_git(["git", "describe", "--tags", "--abbrev=0"], timeout=15)
+    if result is None or result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 def render(commits: list[Commit], *, version: str, protocol: int, since: str | None) -> str:
