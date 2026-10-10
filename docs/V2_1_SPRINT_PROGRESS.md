@@ -50,3 +50,18 @@ reflect actual work performed; nothing is backdated.
 - Tests added: 9 unit (`test_cooling_controller.py`), 2 integration
   (`test_services.py`, including a real-link mock test). Full suite green,
   ruff + mypy clean.
+
+## Phase 2 (cont.) — desktop notifications were a silent no-op
+
+- **Defect C (functional): the Windows-notifications setting did nothing.**
+  ``AlertService._notify`` published to ``alerts.notify`` but no component ever
+  subscribed, so a warning/critical alert produced no desktop notification at
+  all while the Settings switch implied it would.
+- Fix: exported ``TOPIC_NOTIFY`` and consumed it in the shell; a raised alert
+  now shows a ``QSystemTrayIcon`` balloon (Warning/Critical icon), skipped when
+  the tray is hidden. The service still owns the *whether* (severity gate +
+  setting); the shell owns the *how*.
+- Tests: 4 unit (`test_notifications.py`) and 3 integration
+  (`test_services.py`) covering publish/suppress/severity gating.
+- Note: default ``alerts.windows_notifications`` is ``False`` (opt-in,
+  privacy-respecting); tests enable it explicitly.

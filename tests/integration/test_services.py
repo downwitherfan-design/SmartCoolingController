@@ -21,7 +21,7 @@ from app.core.enums import (
     ControllerMode,
     ExportFormat,
 )
-from app.services.alerts import TOPIC_ALERT
+from app.services.alerts import TOPIC_ALERT, TOPIC_NOTIFY
 
 
 def test_services_start_on_the_simulation_backend(services) -> None:
@@ -234,6 +234,51 @@ def test_alerts_service_raises_and_clears(services) -> None:
     assert raised, "raising an event should publish on the alert topic"
     recent = services.alerts.recent(limit=10)
     assert any(a.dedup_key == "test.alert" for a in recent)
+
+
+def test_a_warning_alert_requests_a_desktop_notification(services) -> None:
+    """Regression: the notification was published to a topic nobody consumed."""
+    services.alerts.set_notifications_enabled(True)
+    notified: list = []
+    services.bus.subscribe(TOPIC_NOTIFY, lambda e: notified.append(e.payload))
+    services.alerts.raise_event(
+        category=AlertCategory.THERMAL,
+        severity=AlertSeverity.WARNING,
+        title="Notify me",
+        message="cpu hot",
+        event_type=AlertEventType.THERMAL_WARNING,
+        dedup_key="test.notify",
+    )
+    assert notified, "a warning alert must publish a notification request"
+    assert notified[0].title == "Notify me"
+
+
+def test_information_alerts_do_not_notify(services) -> None:
+    services.alerts.set_notifications_enabled(True)
+    notified: list = []
+    services.bus.subscribe(TOPIC_NOTIFY, lambda e: notified.append(e.payload))
+    services.alerts.raise_event(
+        category=AlertCategory.SYSTEM,
+        severity=AlertSeverity.INFORMATION,
+        title="Just so you know",
+        event_type=AlertEventType.PROFILE_CHANGE,
+        dedup_key="test.info",
+    )
+    assert notified == []
+
+
+def test_disabling_notifications_suppresses_the_request(services) -> None:
+    services.alerts.set_notifications_enabled(False)
+    notified: list = []
+    services.bus.subscribe(TOPIC_NOTIFY, lambda e: notified.append(e.payload))
+    services.alerts.raise_event(
+        category=AlertCategory.THERMAL,
+        severity=AlertSeverity.CRITICAL,
+        title="Critical",
+        event_type=AlertEventType.CRITICAL_TEMPERATURE,
+        dedup_key="test.suppressed",
+    )
+    assert notified == []
 
 
 def test_backup_can_be_created(services) -> None:

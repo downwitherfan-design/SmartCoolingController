@@ -40,7 +40,7 @@ from app.core.enums import ConnectionState, Language, PerformanceMode
 from app.core.events import Event
 from app.models.telemetry import TelemetrySnapshot
 from app.network.connection import TOPIC_STATE as TOPIC_CONNECTION
-from app.services.alerts import TOPIC_ALERT, TOPIC_ALERT_CLEARED
+from app.services.alerts import TOPIC_ALERT, TOPIC_ALERT_CLEARED, TOPIC_NOTIFY
 from app.services.cooling_control import TOPIC_MODE
 from app.services.health import TOPIC_HEALTH
 from app.services.sessions import TOPIC_SESSIONS
@@ -281,6 +281,7 @@ class MainWindow(QMainWindow):
                 TOPIC_SNAPSHOT,
                 TOPIC_ALERT,
                 TOPIC_ALERT_CLEARED,
+                TOPIC_NOTIFY,
                 TOPIC_HEALTH,
                 TOPIC_CONNECTION,
                 TOPIC_SESSIONS,
@@ -296,6 +297,8 @@ class MainWindow(QMainWindow):
             self._on_snapshot(event)
         elif topic in (TOPIC_ALERT, TOPIC_ALERT_CLEARED):
             self._on_alert(event)
+        elif topic == TOPIC_NOTIFY:
+            self._show_notification(event.payload)
         elif topic == TOPIC_HEALTH:
             self._on_health(event)
         elif topic == TOPIC_CONNECTION:
@@ -321,6 +324,30 @@ class MainWindow(QMainWindow):
         snapshot = self.services.telemetry.last_snapshot
         if page is not None and snapshot is not None:
             page.on_snapshot(snapshot)
+
+    def _show_notification(self, alert: object) -> None:
+        """Show a desktop notification for a raised alert.
+
+        The alert service decides *whether* a notification is due (its severity
+        and the Windows-notifications setting); the shell decides *how* it is
+        delivered.  A tray balloon is the portable choice on Windows: the
+        installed build always has a tray icon, whereas ``QSystemTrayIcon``
+        ``showMessage`` needs nothing extra.
+        """
+        if not self.tray.isVisible():
+            return
+        title = getattr(alert, "title", None)
+        body = getattr(alert, "message", None) or title
+        severity = getattr(alert, "severity", None)
+        icon = QSystemTrayIcon.MessageIcon.Critical
+        if severity is not None and getattr(severity, "value", "") == "warning":
+            icon = QSystemTrayIcon.MessageIcon.Warning
+        self.tray.showMessage(
+            str(title or APP_NAME),
+            str(body or ""),
+            icon,
+            8000,
+        )
 
     def _on_health(self, event: Event) -> None:
         report = event.payload

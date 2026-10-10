@@ -30,6 +30,10 @@ _log = get_logger(__name__)
 
 TOPIC_ALERT = "alerts.raised"
 TOPIC_ALERT_CLEARED = "alerts.cleared"
+#: A desktop-notification request for a raised alert, consumed by the UI shell.
+#: Kept separate from ``TOPIC_ALERT`` so a webhook, log sink or head-less run can
+#: ignore notifications without filtering the alert stream.
+TOPIC_NOTIFY = "alerts.notify"
 
 #: Emit a notification at or above this severity.
 NOTIFY_SEVERITY = AlertSeverity.WARNING
@@ -226,7 +230,7 @@ class AlertService:
     def _notify(self, alert: AlertEvent) -> None:
         if not self._notifications or alert.severity is AlertSeverity.INFORMATION:
             return
-        self._bus.publish("alerts.notify", alert)
+        self._bus.publish(TOPIC_NOTIFY, alert)
 
     @staticmethod
     def _value_for(key: str, snapshot: TelemetrySnapshot) -> float | None:
