@@ -209,4 +209,23 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
 
 - Logs and exported support bundles pass through `redact_text()` in
   `app/core/logging_setup.py`. Route any new log/export path through it; never
-  log tokens, keys or pairing codes directly.
+  log tokens, keys or pairing codes directly. The redaction set also covers
+  credentials embedded in a URL (`scheme://user:pass@host`) and opaque webhook
+  path tokens; add a pattern there rather than special-casing a caller.
+
+## Lifecycle invariants (V2)
+
+- `Services.shutdown()` runs each teardown step in its own guard. Do not move a
+  step back inside a single `try`: one failing subsystem used to skip the
+  persistence drain and leak the database handle. `tests/integration/test_services.py`
+  guards this.
+- `MainWindow` is a singleton and `shutdown()` clears `MainWindow._instance`;
+  `create_window` must always be able to hand back a live window wired to an
+  open database.
+- `ConnectionManager` state changes go through `_set_state` with a session
+  generation guard. Never publish a state from an old session.
+- UI smoke test: `tests/ui/test_pages_smoke.py` builds and renders every page in
+  both languages and asserts each page built as its real class, not the
+  error-placeholder page. A new page that raises during `build()` fails here.
+- `redact_text` and the diagram/animation state mapping are the two places where
+  "looks right" is not good enough — both have focused tests; extend them.
