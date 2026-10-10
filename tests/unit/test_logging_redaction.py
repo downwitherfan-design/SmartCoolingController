@@ -66,3 +66,50 @@ def test_filter_rewrites_the_record_before_handlers_see_it() -> None:
 
     assert records == ["handshake failed: token=<redacted>"]
     assert "supersecretvalue" not in records[0]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # JSON / dict-repr secrets: the quote between key and colon defeated the
+        # original `key[:=]value` rule, leaking the value.
+        '"token": "abcdef123456"',
+        '{"password": "hunter2"}',
+        '{"pairingCode": "123456"}',
+        "'secret': 'zzz-value'",
+        # Unquoted variants of the same names.
+        "secretkey=zzz",
+        "pairing_code=123456",
+        "session_token=abc.def.ghi",
+        "client_secret: shhh",
+    ],
+)
+def test_structured_secret_shapes_are_redacted(raw: str) -> None:
+    scrubbed = redact_text(raw)
+    assert "<redacted" in scrubbed
+    for secret in ("abcdef123456", "hunter2", "123456", "zzz-value", "abc.def.ghi", "shhh"):
+        assert secret not in scrubbed
+
+
+def test_pem_private_key_is_redacted() -> None:
+    pem = (
+        "config dump:\n"
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "MIIEowIBAAKCAQEA1234567890abcdef\n"
+        "-----END RSA PRIVATE KEY-----\n"
+        "end"
+    )
+    scrubbed = redact_text(pem)
+    assert "MIIEowIBAAKCAQEA" not in scrubbed
+    assert "<redacted-private-key>" in scrubbed
+
+
+def test_ordinary_key_words_are_not_over_redacted() -> None:
+    # "key" as an ordinary noun must survive; we only redact credential names.
+    for text in (
+        "the shortcut key is Enter",
+        'the key "value" maps to a column',
+        "monkey=banana",
+    ):
+        assert redact_text(text) == text
+

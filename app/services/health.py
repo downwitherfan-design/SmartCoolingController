@@ -20,7 +20,7 @@ from app import APP_VERSION, BUILD_ID, PROTOCOL_VERSION
 from app.core.clock import to_iso, utc_now
 from app.core.enums import HealthStatus
 from app.core.events import EventBus
-from app.core.logging_setup import get_logger
+from app.core.logging_setup import get_logger, redact_text
 from app.models.alerts import HealthReport
 
 _log = get_logger(__name__)
@@ -142,7 +142,13 @@ class DiagnosticsService:
 
 
 def redact(value: Any) -> Any:
-    """Recursively redact values whose key looks like a secret."""
+    """Recursively redact secrets by key name *and* by value shape.
+
+    Key-based redaction catches ``{"password": "..."}``; value-based redaction
+    (via the shared :func:`redact_text` rules) catches a credential sitting
+    inside an ordinary string, such as a URL with embedded userinfo in an error
+    message.  Support bundles are shared publicly, so both are needed.
+    """
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
@@ -155,6 +161,8 @@ def redact(value: Any) -> Any:
         return [redact(item) for item in value]
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, str):
+        return redact_text(value)
     return value
 
 
