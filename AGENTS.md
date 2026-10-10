@@ -229,3 +229,25 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
   error-placeholder page. A new page that raises during `build()` fails here.
 - `redact_text` and the diagram/animation state mapping are the two places where
   "looks right" is not good enough — both have focused tests; extend them.
+
+## V2.1 audit invariants
+
+- **Safety overrides bypass the profile envelope.** SAFE mode and an
+  over-temperature response are limited only by the absolute `[0, 100]` range,
+  never by `profile.max_pwm`. `_clamp_and_emit(safety_override=True)` enforces
+  this; `tests/unit/test_cooling_controller.py` guards it. A profile must never
+  be able to cap an emergency.
+- **Every released artefact is in `checksums.sha256`.** `deliver.py` appends the
+  installer digest and the Windows workflow fails the release if it is missing,
+  because `RELEASE_NOTES.md` tells the user to verify against that file.
+- **Translation catalogues stay symmetric.** `tests/unit/test_i18n.py` fails if
+  EN/FA diverge or if a `ConnectionState`/`HealthStatus`/schematic field lacks a
+  key. Add strings to both catalogues, never one.
+- **`Translator` coerces its language.** Callers pass `"en"`/`"fa"` strings;
+  `_coerce_language` normalises them so identity checks for RTL and Persian
+  digits work. Never compare `self._language` to a raw string.
+- **Redaction is a security boundary.** `redact_text` must catch quoted
+  (`"token": "…"`), unquoted and PEM-shaped secrets; `redact()` in
+  `app/services/health.py` applies the text rules to string values so support
+  bundles (which are shared publicly) cannot leak a credential hidden in a log
+  line.
