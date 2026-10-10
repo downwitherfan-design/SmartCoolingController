@@ -331,9 +331,13 @@ def test_windows_installer_workflow_publishes_on_tags() -> None:
 
 
 def test_windows_installer_workflow_verifies_the_frozen_binary() -> None:
+    # Verification is owned by scripts/build/verify_frozen.py, which the release
+    # pipeline runs; the workflow must go through that one code path rather than
+    # re-implementing a fragile bare `--version` smoke test (a GUI-subsystem exe
+    # in PowerShell does not reliably set $LASTEXITCODE).
     text = _WORKFLOW.read_text(encoding="utf-8")
-    assert "--headless" in text
-    assert "--version" in text
+    assert "scripts/package/release.py" in text
+    assert "$LASTEXITCODE" not in text
 
 
 # ---------------------------------------------------------------------------

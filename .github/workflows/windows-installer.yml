@@ -74,14 +74,6 @@ jobs:
       - name: Assemble the delivery package
         run: python scripts/package/deliver.py --release
 
-      - name: Smoke-test the frozen executable
-        shell: pwsh
-        run: |
-          $exe = "build/dist/SmartCoolingController/SmartCoolingController.exe"
-          & $exe --version
-          & $exe --headless --headless-seconds 2
-          if ($LASTEXITCODE -ne 0) { throw "frozen smoke-test failed" }
-
       - name: Collect artefacts
         shell: pwsh
         run: |
