@@ -83,6 +83,7 @@ class ApplicationServices:
             heartbeat_interval_s=self.config.esp32.heartbeat_interval_s,
             heartbeat_timeout_s=self.config.esp32.heartbeat_timeout_s,
             connect_timeout_s=self.config.esp32.connect_timeout_s,
+            send_interval_s=self.config.esp32.send_interval_ms / 1000.0,
             backoff_schedule=list(self.config.esp32.reconnect_backoff_s),
             reconnect_jitter=self.config.esp32.reconnect_jitter,
             healthy_reset_s=self.config.esp32.healthy_reset_s,

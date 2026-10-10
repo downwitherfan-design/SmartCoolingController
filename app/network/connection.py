@@ -212,6 +212,7 @@ class ConnectionManager:
         heartbeat_interval_s: float = 1.0,
         heartbeat_timeout_s: float = 3.0,
         connect_timeout_s: float = 5.0,
+        send_interval_s: float = 0.5,
         backoff_schedule: list[float] | None = None,
         reconnect_jitter: float = 0.25,
         healthy_reset_s: float = 5.0,
@@ -222,6 +223,9 @@ class ConnectionManager:
         self._heartbeat_interval_s = heartbeat_interval_s
         self._heartbeat_timeout_s = heartbeat_timeout_s
         self._connect_timeout_s = connect_timeout_s
+        # Cadence of the telemetry push loop.  A stalled link is already caught
+        # by the heartbeat timeout, so this only decides how often we sample.
+        self._send_interval_s = max(0.05, send_interval_s)
         self._backoff_schedule = backoff_schedule or [1.0, 2.0, 4.0, 8.0, 15.0, 30.0]
         self._reconnect_jitter = max(0.0, min(1.0, reconnect_jitter))
         self._healthy_reset_s = healthy_reset_s
@@ -781,7 +785,7 @@ class ConnectionManager:
                     raise
                 except Exception:
                     _log.exception("telemetry push failed")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(self._send_interval_s)
 
     def _oldest_heartbeat_age(self) -> float | None:
         if not self._pending_heartbeats:
