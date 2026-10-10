@@ -88,6 +88,11 @@ PAGE_CLASSES: dict[str, type[Page]] = {
     "about": AboutPage,
 }
 
+#: How often subsystem health is recomputed while the app is running.  Slow
+#: enough to be invisible in CPU, fast enough that a failing fan or database is
+#: noticed without opening the Diagnostics page.
+HEALTH_INTERVAL_MS = 5000
+
 _SHORTCUTS: tuple[tuple[str, str, str], ...] = (
     ("Ctrl+K", "shortcut.palette", "palette"),
     ("Ctrl+,", "shortcut.settings", "settings"),
@@ -141,6 +146,17 @@ class MainWindow(QMainWindow):
         self._clock.setInterval(1000)
         self._clock.timeout.connect(self._tick_status)
         self._clock.start()
+
+        # Subsystem health used to be computed only when the Diagnostics page
+        # was opened, so the rail badge and dashboard health card went stale for
+        # the rest of the session.  A dedicated, slower timer keeps them live.
+        # The probes are cheap liveness checks (see _probe_database), so this
+        # cadence is safe on the GUI thread.
+        self._health_timer = QTimer(self)
+        self._health_timer.setInterval(HEALTH_INTERVAL_MS)
+        self._health_timer.timeout.connect(self._refresh_health)
+        self._health_timer.start()
+        self._refresh_health()
 
         last = services.config.window.selected_page or "dashboard"
         self.show_page(last if last in PAGE_CLASSES else "dashboard")
@@ -658,6 +674,16 @@ class MainWindow(QMainWindow):
         self.show_page(key)
 
     # -- status tick -------------------------------------------------------
+
+    def _refresh_health(self) -> None:
+        """Recompute subsystem health off the timer.
+
+        ``HealthService.check`` publishes ``TOPIC_HEALTH``, which the bridge
+        marshals back onto the GUI thread and :meth:`_on_health` renders.  The
+        call is synchronous on the GUI thread; the probes are deliberately cheap
+        (liveness queries only) so a large database cannot stall the UI.
+        """
+        self.services.health.check()
 
     def _tick_status(self) -> None:
         self.status.set_rate(self.services.telemetry.interval_s)

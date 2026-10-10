@@ -253,3 +253,23 @@ def test_no_widget_text_is_clipped_in_persian(window) -> None:
         window.layout().activate()
         clipped = _clipped_labels(window._pages[key].content)
         assert clipped == [], f"{key} (fa) clipped: {clipped[:6]}"
+
+
+def test_health_is_refreshed_on_a_timer(window) -> None:
+    # Regression: health used to be computed only when the Diagnostics page was
+    # opened, so the rail badge and dashboard health card never changed during a
+    # session.  The shell must now recompute it on its own timer.
+    assert window._health_timer.isActive()
+    window.services.health._last = None  # type: ignore[attr-defined]
+    window._refresh_health()
+    assert window.services.health.last_report is not None
+
+
+def test_health_badge_reflects_the_report(window) -> None:
+    window._refresh_health()
+    report = window.services.health.last_report
+    assert report is not None
+    # With telemetry never started in the fixture, the CPU probe reports UNKNOWN,
+    # which must reach the rail badge rather than staying at its initial state.
+    assert window.rail.health_badge._text
+

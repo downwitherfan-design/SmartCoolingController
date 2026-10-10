@@ -94,6 +94,20 @@ class Persistence:
         except Exception:
             return False
 
+    def is_healthy(self) -> bool:
+        """Cheap liveness probe for a live health panel.
+
+        Unlike :meth:`integrity_check` — which runs ``PRAGMA integrity_check``
+        and walks the entire database, making it unfit for a periodic poll — this
+        issues an indexed ``SELECT`` that only touches the WAL index header.  A
+        full integrity scan belongs in the support bundle, not on a timer.
+        """
+        try:
+            self.database.query_one("SELECT MAX(ts) AS ts FROM snapshots")
+            return True
+        except Exception:
+            return False
+
     def close(self) -> None:
         self.stop_writer()
         self.database.close()

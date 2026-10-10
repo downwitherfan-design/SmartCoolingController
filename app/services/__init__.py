@@ -429,7 +429,9 @@ class ApplicationServices:
     def _probe_database(self):
         if self.persistence is None:
             return HealthStatus.ERROR, self._persistence_error or "health.detail.unavailable"
-        ok = self.persistence.integrity_check()
+        # Liveness only: this runs on a timer, so it must stay cheap.  The full
+        # PRAGMA integrity scan is reserved for the on-demand support bundle.
+        ok = self.persistence.is_healthy()
         size_mb = self.persistence.database.size_bytes() / (1024 * 1024)
         return (
             (HealthStatus.HEALTHY if ok else HealthStatus.ERROR),
