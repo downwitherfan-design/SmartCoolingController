@@ -340,6 +340,18 @@ def test_windows_installer_workflow_verifies_the_frozen_binary() -> None:
     assert "$LASTEXITCODE" not in text
 
 
+def test_release_publishes_a_hand_written_install_guide() -> None:
+    # The generated release notes are just a commit list; the download/run
+    # steps must come from the repository so every release explains itself.
+    notes = ROOT / "RELEASE_NOTES.md"
+    assert notes.is_file()
+    text = notes.read_text(encoding="utf-8")
+    assert "-setup.exe" in text
+    assert "Get-FileHash" in text
+    workflow = _WORKFLOW.read_text(encoding="utf-8")
+    assert "body_path: RELEASE_NOTES.md" in workflow
+
+
 # ---------------------------------------------------------------------------
 # verify_frozen.py decodes the child process output itself.
 #

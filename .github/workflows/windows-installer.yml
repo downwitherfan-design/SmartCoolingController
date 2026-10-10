@@ -96,4 +96,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: out/*
+          # Keep the hand-written download/verify guide, then append the
+          # generated commit list so each release explains how to install.
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
