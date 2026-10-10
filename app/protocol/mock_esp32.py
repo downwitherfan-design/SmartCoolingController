@@ -84,6 +84,8 @@ class MockEsp32:
         self.delay_first_status_s = 0.0
         #: Emit a malformed (non-JSON) frame every Nth packet (0 = disabled).
         self.malformed_every = 0
+        #: Emit an oversized (over MAX_PACKET_BYTES) frame every Nth packet.
+        self.oversized_every = 0
         #: Answer with an incompatible protocol version.
         self.bad_version = False
         self._sent_packets = 0
@@ -308,6 +310,15 @@ class MockEsp32:
         self._sent_packets += 1
         if self.malformed_every and self._sent_packets % self.malformed_every == 0:
             writer.write(_encode_ws_frame(b"{this is not valid json"))
+            with contextlib.suppress(Exception):
+                await writer.drain()
+            return
+
+        if self.oversized_every and self._sent_packets % self.oversized_every == 0:
+            # A well-formed WebSocket frame carrying a JSON body larger than the
+            # client's MAX_PACKET_BYTES: the client must reject it on size.
+            blob = b'{"v":1,"type":"STATUS","id":"x","ts":0,"seq":0,"data":{"pad":"' + b"A" * 9000 + b'"}}'
+            writer.write(_encode_ws_frame(blob))
             with contextlib.suppress(Exception):
                 await writer.drain()
             return

@@ -413,7 +413,14 @@ class ConnectionManager:
         The server is started on the connection thread's event loop and this
         call does not return until the socket is actually listening, so the
         caller may connect immediately without racing the loop start-up.
+
+        Calling this again replaces the previous mock; the old server is shut
+        down first so its listening socket and simulation tasks cannot leak.
         """
+        previous = self._mock
+        if previous is not None:
+            self._stop_mock(previous)
+
         mock = MockEsp32(host=host, port=port)
         self._mock = mock
         self.start()
@@ -443,6 +450,20 @@ class ConnectionManager:
                 return True
             time.sleep(0.02)
         return False
+
+    def _stop_mock(self, mock: MockEsp32, timeout: float = 5.0) -> None:
+        """Stop ``mock`` on the connection loop and wait for it to close.
+
+        Used when a mock is replaced and during :meth:`stop`, so no listening
+        socket or simulation task can survive its owner.
+        """
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            return
+        with contextlib.suppress(RuntimeError):
+            future = asyncio.run_coroutine_threadsafe(mock.stop(), loop)
+            with contextlib.suppress(Exception):
+                future.result(timeout=timeout)
 
     # -- metrics for the telemetry engine ----------------------------------
 
@@ -807,15 +828,20 @@ class ConnectionManager:
                     max(0.0, now - self._session_t0) * 1000.0, 2
                 )
 
+        # A peer-reported ERROR means the controller is up but unhealthy; it must
+        # not be overwritten by the generic promotion below in the same call.
+        promote = True
         if packet.message_type in {MessageType.STATUS, MessageType.PAIR_ACK, MessageType.HELLO}:
             self._apply_status(packet)
         elif packet.message_type is MessageType.ERROR:
+            promote = False
             self._set_state(
                 _DEGRADED, str(packet.data.get("message", "error")), epoch=epoch
             )
 
-        # Only a *live* session may declare CONNECTED.
-        if self._state is not ConnectionState.CONNECTED:
+        # Only a *live* session may declare CONNECTED, and only for a packet that
+        # actually carried a usable status.
+        if promote and self._state is not ConnectionState.CONNECTED:
             self._set_state(_CONNECTED, "telemetry", epoch=epoch)
         self._bus.publish(TOPIC_STATUS, self._status)
 
