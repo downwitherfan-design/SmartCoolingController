@@ -129,6 +129,22 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
   The tests parse the workflow with `pyyaml`, which is why it is pinned in
   `requirements-build.txt`; the YAML key `on` is parsed as the boolean `True`,
   so read triggers with `data.get("on", data.get(True))`.
+- **Windows CI surfaced three bugs that Linux cannot see — keep them fixed.**
+  1. `.gitignore` used a bare `build/`, which matches at *any* depth and hid
+     `scripts/build/` (and would hide `scripts/diagnostics/`) from git.  The
+     files existed on every developer's disk, so local builds passed, but a
+     fresh clone/CI had no `build.py` and the release step died with
+     `No such file or directory`.  The output ignores are anchored to the root
+     (`/build/`, `/dist/`, `/dist_wheel/`).
+  2. `verify_frozen.py` decoded the child's stdout with the locale encoding; the
+     frozen app prints a `·` separator, Windows used the ANSI code page, and the
+     UTF-8 decode raised and left `stdout=None` (→ "argument of type 'NoneType'
+     is not iterable").  It now pins `PYTHONIOENCODING=utf-8` and decodes with
+     `errors="replace"`; the workflow sets the same env.
+  3. A hand-written PowerShell smoke test read `$LASTEXITCODE` from a
+     GUI-subsystem exe, which does not set it reliably.  Verification lives in
+     `verify_frozen.py` only — do not re-add a bare `& $exe` check to the YAML.
+  `tests/unit/test_packaging.py` guards all three.
 - **`build_windows.bat` uses a flat, `goto`-based structure on purpose.**
   `cmd.exe` parses a whole parenthesised block up front, so a single unescaped
   unbalanced `(` inside an `if (` / `for ... do (` block aborts the entire
