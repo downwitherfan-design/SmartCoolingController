@@ -28,6 +28,23 @@ _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)authorization:\s*\S+.*"), "authorization: <redacted>"),
     (re.compile(r"\b[0-9a-fA-F]{32,}\b"), "<redacted-hex>"),
     (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]+"), "Bearer <redacted>"),
+    # Credentials embedded in a URL (https://user:token@host/…) leak the same
+    # way whether the secret is a password or an API token, so redact the whole
+    # userinfo password component and leave the scheme/user/host readable.
+    (
+        re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://[^/\s:@]+):[^/\s@]+@"),
+        r"\1:<redacted>@",
+    ),
+    # Webhook URLs (Slack/Discord/…) carry their secret as a long opaque path
+    # segment. Require some non-lowercase entropy so a readable slug like
+    # ".../installation-guide" is left alone, but over-redacting is the safe
+    # direction to fail.
+    (
+        re.compile(
+            r"(https?://[^\s\"'<>]+/)(?=[A-Za-z0-9_\-]*[0-9A-Z])([A-Za-z0-9_\-]{16,})(?=[\"'\s<>]|$)"
+        ),
+        r"\1<redacted>",
+    ),
 )
 
 
