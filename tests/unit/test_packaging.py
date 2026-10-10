@@ -238,15 +238,41 @@ def test_release_pipeline_accepts_skip_installer() -> None:
     assert "continuing without them" in text
 
 
-def test_installer_search_covers_a_per_user_install(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_installer_search_covers_a_per_user_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # find_iscc() probes several absolute Windows paths; a real machine (CI!)
+    # may already have one of them.  Redirect every probe into an empty tree so
+    # the test observes only the search order, not the host.
     sys.path.insert(0, str(ROOT / "scripts"))
     import common
 
-    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\me\AppData\Local")
-    monkeypatch.setenv("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
-    # No ISCC anywhere on this machine: the search must return None, not raise.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("LOCALAPPDATA", str(empty / "AppData" / "Local"))
+    monkeypatch.setenv("PROGRAMFILES(X86)", str(empty / "Program Files (x86)"))
+    monkeypatch.setattr(common, "_INNO_CANDIDATES", (str(empty / "pf" / "ISCC.exe"),))
     monkeypatch.setattr(common.shutil, "which", lambda *_a, **_k: None)
+    # No ISCC anywhere on this machine: the search must return None, not raise.
     assert common.find_iscc() is None
+
+
+def test_installer_search_finds_a_per_user_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The per-user install (``%LOCALAPPDATA%\Programs\Inno Setup 6``) is the one
+    # a standard, non-elevated user gets, so the search must reach it.
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import common
+
+    local = tmp_path / "Local"
+    iscc = local / "Programs" / "Inno Setup 6" / "ISCC.exe"
+    iscc.parent.mkdir(parents=True)
+    iscc.write_bytes(b"stub")
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.setattr(common, "_INNO_CANDIDATES", ())
+    monkeypatch.setattr(common.shutil, "which", lambda *_a, **_k: None)
+    assert common.find_iscc() == iscc
 
 
 def test_launcher_detects_a_stale_checkout() -> None:
