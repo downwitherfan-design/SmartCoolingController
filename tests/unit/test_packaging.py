@@ -265,3 +265,46 @@ def test_release_notes_never_calls_subprocess_directly() -> None:
     text = (ROOT / "scripts" / "package" / "release_notes.py").read_text(encoding="utf-8")
     assert "subprocess" not in text
     assert "from common import" in text and "git" in text
+
+
+# ---------------------------------------------------------------------------
+# The Windows installer workflow.
+#
+# CI is how a real `setup.exe` and a download link get produced.  It must build
+# on a genuine Windows runner, compile the installer with Inno Setup, verify the
+# frozen executable and publish the artefacts on a tag.  These assertions keep
+# the workflow honest if it is ever edited.
+# ---------------------------------------------------------------------------
+
+_WORKFLOW = ROOT / ".github" / "workflows" / "windows-installer.yml"
+
+
+def test_windows_installer_workflow_exists_and_is_valid_yaml() -> None:
+    import yaml
+
+    data = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+    assert data["jobs"]["windows"]["runs-on"] == "windows-latest"
+
+
+def test_windows_installer_workflow_builds_the_installer() -> None:
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    assert "scripts/installer/build_installer.py" in text
+    assert "innosetup" in text  # Inno Setup must actually be installed
+    assert "scripts/package/deliver.py" in text
+
+
+def test_windows_installer_workflow_publishes_on_tags() -> None:
+    import yaml
+
+    data = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+    # PyYAML parses the bare YAML key ``on`` as the boolean True.
+    triggers = data.get("on", data.get(True))
+    assert triggers is not None
+    assert "v*" in triggers["push"]["tags"]
+    assert data["permissions"]["contents"] == "write"
+
+
+def test_windows_installer_workflow_verifies_the_frozen_binary() -> None:
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    assert "--headless" in text
+    assert "--version" in text

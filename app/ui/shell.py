@@ -557,6 +557,21 @@ class MainWindow(QMainWindow):
     def _on_language_changed(self, language: Language) -> None:
         self.translator.set_language(language)
         self.apply_theme(rebuild_pages=False, retranslate=True)
+        # Cached pages were built with the previous translator; recreate them so
+        # every string (including ones a page's ``retranslate`` may not cover)
+        # is rendered in the newly selected language.
+        self._rebuild_all_pages()
+
+    def _rebuild_all_pages(self) -> None:
+        """Discard every cached page and rebuild the current one."""
+        current = self._current_key or "dashboard"
+        for key in list(self._pages):
+            page = self._pages.pop(key)
+            self.stack.removeWidget(page.content)
+            page.teardown()
+            page.deleteLater()
+        self._current_key = ""
+        self.show_page(current)
 
     def _on_performance_changed(self, mode: PerformanceMode) -> None:
         self.theme = self._resolve_theme()

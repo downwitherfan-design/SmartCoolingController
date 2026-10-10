@@ -23,10 +23,26 @@ thermal profiles, and keeps a local history for later export.
 - **First-run wizard** — language, theme, data location and hardware backend,
   all reconfigurable later.
 
+## Download & install (Windows)
+
+The one-click installer and the portable build are produced on every tag by the
+[Windows installer workflow](.github/workflows/windows-installer.yml) and
+attached to the [Releases](https://github.com/downwitherfan-design/SmartCoolingController/releases)
+page:
+
+- **`SmartCoolingController-1.0.0-setup.exe`** — the installer. Download it,
+  double-click, done. No Python, no administrator rights (per-user install).
+- **`SmartCoolingController-1.0.0-windows-x86_64.zip`** — the portable build.
+  Unzip and run `SmartCoolingController.exe`; nothing is installed.
+
+Verify a download before running it with
+`Get-FileHash <file> -Algorithm SHA256` and compare against `checksums.sha256`
+on the release page.
+
 ## Requirements
 
 - Windows 10/11 (the app also runs head-less on Linux for CI and packaging).
-- Python 3.11–3.13.
+- Python 3.11–3.14.
 - An ESP32 cooling pad running a compatible firmware, or the built-in
   simulated backend for a hardware-free demo.
 

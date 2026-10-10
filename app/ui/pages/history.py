@@ -60,8 +60,8 @@ class HistoryPage(Page):
         specs = [
             ("cpu_max", "dash.cpu", "cpu", "°C"),
             ("gpu_max", "dash.gpu", "gpu", "°C"),
-            ("fan_avg", "dash.fan_rpm", "fan", "RPM"),
-            ("time_above", "history.time_above", "alerts", "min"),
+            ("fan_avg", "dash.fan_rpm", "fan", self.tr_.t("unit.rpm")),
+            ("time_above", "history.time_above", "alerts", self.tr_.t("common.minutes")),
         ]
         for index, (key, title_key, icon, unit) in enumerate(specs):
             card = MetricCard(self.theme, self.tr_, title=self.tr_.t(title_key), unit=unit, icon_name=icon)

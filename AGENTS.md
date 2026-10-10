@@ -119,6 +119,16 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
 
 ## Packaging
 
+- **The one-click installer and download link come from CI.**
+  `.github/workflows/windows-installer.yml` runs on `windows-latest`, installs
+  Inno Setup 6 via Chocolatey, and drives the *same* pipeline a developer runs
+  (`scripts/package/release.py` → `build_installer.py` → `deliver.py`). On a
+  `v*` tag it attaches `SmartCoolingController-<version>-setup.exe` and the
+  portable zip to the GitHub Release — that Release is the download link in the
+  README. `tests/unit/test_packaging.py` guards the workflow's key properties.
+  The tests parse the workflow with `pyyaml`, which is why it is pinned in
+  `requirements-build.txt`; the YAML key `on` is parsed as the boolean `True`,
+  so read triggers with `data.get("on", data.get(True))`.
 - **`build_windows.bat` uses a flat, `goto`-based structure on purpose.**
   `cmd.exe` parses a whole parenthesised block up front, so a single unescaped
   unbalanced `(` inside an `if (` / `for ... do (` block aborts the entire

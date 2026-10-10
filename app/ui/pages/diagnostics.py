@@ -76,7 +76,7 @@ class DiagnosticsPage(Page):
         env_layout.addWidget(SectionHeader(self.tr_.t("about.title")))
         self.env_rows: dict[str, KeyValueRow] = {}
         for key in ("app_version", "build_id", "python", "platform", "mode", "database_path"):
-            row_widget = KeyValueRow(key.replace("_", " ").title(), "—", mono=True)
+            row_widget = KeyValueRow(self.tr_.t(f"env.{key}"), "—", mono=True)
             self.env_rows[key] = row_widget
             env_layout.addWidget(row_widget)
         env_layout.addStretch(1)
@@ -191,6 +191,10 @@ class DiagnosticsPage(Page):
             return
         self.bundle_button.setText(self.tr_.t("diagnostics.create_bundle"))
         self.copy_button.setText(self.tr_.t("diagnostics.copy_path"))
+        for key, row in self.env_rows.items():
+            row.set_key(self.tr_.t(f"env.{key}"))
+        for tile in self.health_cards.values():
+            tile.set_translator(self.tr_)
 
 
 class _HealthTile(QWidget):
@@ -199,6 +203,8 @@ class _HealthTile(QWidget):
     def __init__(self, theme, translator, key: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.theme = theme
+        self.tr_ = translator
+        self._key = key
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACE["md"], SPACE["md"], SPACE["md"], SPACE["md"])
         layout.setSpacing(SPACE["xs"])
@@ -211,15 +217,35 @@ class _HealthTile(QWidget):
         self.detail_label.setProperty("role", "caption")
         self.detail_label.setWordWrap(True)
         layout.addWidget(self.detail_label)
+        self._status: HealthStatus | None = None
+        self._detail = ""
+
+    def set_translator(self, translator) -> None:
+        self.tr_ = translator
+        self.name_label.setText(
+            translator.t(f"health.{self._key}") if self._key in _HEALTH_KEYS else self._key
+        )
+        if self._status is not None:
+            self._apply()
 
     def set_status(self, status: HealthStatus, detail: str = "") -> None:
+        self._status = status
+        self._detail = detail
+        self._apply()
+
+    def _apply(self) -> None:
+        status = self._status
+        if status is None:
+            return
         token = {
             HealthStatus.HEALTHY: "success",
             HealthStatus.WARNING: "warning",
             HealthStatus.ERROR: "danger",
             HealthStatus.UNKNOWN: "text_faint",
         }[status]
-        self.badge.set_status(status.value, self.theme.color(token))
+        self.badge.set_status(self.tr_.t(f"health.{status.value}"), self.theme.color(token))
+        # Probe details are either a translation key or a value like "45°C".
+        detail = self.tr_.t(self._detail) if self._detail.startswith("health.") else self._detail
         self.detail_label.setText(detail)
 
 

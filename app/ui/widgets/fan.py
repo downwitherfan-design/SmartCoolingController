@@ -172,7 +172,7 @@ class FanVisualizer(ThemedWidget):
             painter.drawText(
                 QRectF(center.x() - hub, center.y() + 3, hub * 2, 14),
                 Qt.AlignmentFlag.AlignCenter,
-                "RPM",
+                self.tr_.t("unit.rpm"),
             )
 
     def apply_theme(self) -> None:

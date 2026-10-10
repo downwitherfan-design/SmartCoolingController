@@ -14,7 +14,7 @@ Accessibility notes (spec §130):
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -42,6 +42,41 @@ def _label(text: str, role: str = "body", parent: QWidget | None = None) -> QLab
     label = QLabel(text, parent)
     label.setProperty("role", role)
     return label
+
+
+class ElidedLabel(QLabel):
+    """A QLabel that elides long, unpredictable text instead of clipping it.
+
+    Environment values (file-system paths, OS strings, version ids) can be far
+    wider than any layout can afford.  Instead of letting Qt hard-clip them we
+    draw an ellipsised form and expose the full text through the tooltip.
+    """
+
+    def __init__(self, text: str = "", role: str = "body", parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setProperty("role", role)
+        self.setMinimumWidth(1)
+        self._full = text
+        if text:
+            self.setToolTip(text)
+
+    def setText(self, text: str) -> None:
+        self._full = text
+        self.setToolTip(text)
+        super().setText(text)
+
+    def paintEvent(self, event) -> None:
+        metrics = QFontMetrics(self.font())
+        elided = metrics.elidedText(self._full, Qt.TextElideMode.ElideMiddle, max(0, self.width()))
+        if elided == self.text():
+            super().paintEvent(event)
+            return
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(self.rect(), int(self.alignment()), elided)
+        painter.end()
+
+
 
 
 def _format_value(value: float) -> str:
@@ -83,8 +118,14 @@ class SectionHeader(QWidget):
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(2)
         self.title = _label(title, "title")
+        self.title.setWordWrap(True)
+        self.title.setMinimumWidth(1)
         text_col.addWidget(self.title)
         self.subtitle = _label(subtitle, "caption")
+        # Persian subtitles are noticeably longer than their English source;
+        # wrapping keeps them readable instead of eliding to "...".
+        self.subtitle.setWordWrap(True)
+        self.subtitle.setMinimumWidth(1)
         self.subtitle.setVisible(bool(subtitle))
         text_col.addWidget(self.subtitle)
         layout.addLayout(text_col)
@@ -313,8 +354,12 @@ class MetricCard(ThemedWidget):
         self.icon_label.setFixedSize(20, 20)
         head.addWidget(self.icon_label)
         self.title_label = _label(title, "subheading")
-        head.addWidget(self.title_label)
-        head.addStretch(1)
+        # The title is the card's self-description; never let it be clipped.
+        # Qt interprets a non-zero minimum as the sizeHint floor, so this is
+        # effectively "size to the longest word, wrap the rest".
+        self.title_label.setWordWrap(True)
+        self.title_label.setMinimumWidth(1)
+        head.addWidget(self.title_label, 1)
         self.badge = MetricStateBadge(theme, translator, "")
         self.badge.setVisible(False)
         head.addWidget(self.badge)
@@ -410,7 +455,7 @@ class KeyValueRow(QWidget):
         self.key_label.setMinimumWidth(120)
         layout.addWidget(self.key_label)
         layout.addStretch(1)
-        self.value_label = _label(value, "mono" if mono else "body")
+        self.value_label = ElidedLabel(value, "mono" if mono else "body")
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.value_label)

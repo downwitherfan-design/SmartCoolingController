@@ -148,3 +148,108 @@ def test_shortcuts_are_registered(window) -> None:
     assert _SHORTCUTS
     for shortcut, label_key, action in _SHORTCUTS:
         assert shortcut and label_key and action
+
+
+def _visible_texts(widget) -> set[str]:
+    from PySide6.QtWidgets import QLabel, QPushButton
+
+    texts: set[str] = set()
+    for child in widget.findChildren(QLabel) + widget.findChildren(QPushButton):
+        text = child.text().strip()
+        # Units and pictographs ("%", "°C", "❚❚") are intentionally identical in
+        # both languages; only real words (lower-case or non-ASCII letters) are
+        # expected to be translated.
+        if text and (any(ch.islower() for ch in text) or any(ord(ch) > 127 and ch.isalpha() for ch in text)):
+            texts.add(text)
+    return texts
+
+
+def test_language_switch_leaves_no_english_strings(window) -> None:
+    """Switching to Persian must retranslate every cached page.
+
+    Regression guard: pages used to be kept in ``self._pages`` with the old
+    translator, so 131 labels stayed English after the switch.  Every page must
+    now be rebuilt against the new translator.
+    """
+    from app.core.enums import Language
+    from app.ui.i18n import _EN, _FA
+    from app.ui.shell import PAGE_CLASSES
+
+    # Only strings whose Persian form differs from English are expected to
+    # change; runtime data (paths, "standard", "0.0 MiB") legitimately does not.
+    en_to_fa = {value: _FA[key] for key, value in _EN.items() if _FA.get(key, value) != value}
+
+    for key in PAGE_CLASSES:
+        window.show_page(key)
+        window._on_language_changed(Language.ENGLISH)
+        page = window._pages.get(key)
+        assert page is not None, f"{key} not built"
+        before = _visible_texts(page.content)
+
+        window._on_language_changed(Language.PERSIAN)
+        rebuilt = window._pages.get(key)
+        assert rebuilt is not None, f"{key} lost after language switch"
+        after = _visible_texts(rebuilt.content)
+
+        stale = sorted(t for t in before if t in after and t in en_to_fa)
+        assert stale == [], f"{key}: untranslated after switch: {stale[:8]}"
+
+
+def test_language_switch_never_shows_raw_keys(window) -> None:
+    """A missing catalogue entry would leak a dotted key into the UI."""
+    import re
+
+    from app.core.enums import Language
+    from app.ui.shell import PAGE_CLASSES
+
+    pattern = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$")
+    window._on_language_changed(Language.PERSIAN)
+    for key in PAGE_CLASSES:
+        window.show_page(key)
+        page = window._pages.get(key)
+        assert page is not None
+        leaked = sorted(t for t in _visible_texts(page.content) if pattern.match(t))
+        assert leaked == [], f"{key}: raw i18n keys shown: {leaked[:8]}"
+
+
+def _clipped_labels(root) -> list[str]:
+    from PySide6.QtWidgets import QLabel
+
+    from app.ui.widgets.atoms import ElidedLabel
+
+    clipped: list[str] = []
+    for label in root.findChildren(QLabel):
+        text = label.text().strip()
+        # Wrapping and eliding labels are designed to fit by design.
+        if not text or label.wordWrap() or isinstance(label, ElidedLabel):
+            continue
+        needed = label.sizeHint().width()
+        if needed > label.width() + 2:
+            clipped.append(f"{text!r} needs {needed}px, has {label.width()}px")
+    return clipped
+
+
+def test_no_widget_text_is_clipped_in_english(window) -> None:
+    from app.core.enums import Language
+
+    window.resize(1440, 900)
+    window.show()
+    window._on_language_changed(Language.ENGLISH)
+    for key in ("dashboard", "history", "diagnostics"):
+        window.show_page(key)
+        window.layout().activate()
+        clipped = _clipped_labels(window._pages[key].content)
+        assert clipped == [], f"{key} (en) clipped: {clipped[:6]}"
+
+
+def test_no_widget_text_is_clipped_in_persian(window) -> None:
+    from app.core.enums import Language
+
+    window.resize(1440, 900)
+    window.show()
+    window._on_language_changed(Language.PERSIAN)
+    for key in ("dashboard", "history", "diagnostics"):
+        window.show_page(key)
+        window.layout().activate()
+        clipped = _clipped_labels(window._pages[key].content)
+        assert clipped == [], f"{key} (fa) clipped: {clipped[:6]}"

@@ -60,7 +60,7 @@ echo [3/4] Installing pinned dependencies (cache: %PIP_CACHE_DIR%)...
 if not exist "%PIP_CACHE_DIR%" mkdir "%PIP_CACHE_DIR%"
 
 rem Fast path: if everything is already importable, skip the network entirely.
-"%VENV_PY%" -c "import PySide6, pyqtgraph, psutil, websockets, pydantic, cryptography, PyInstaller, pytest" >nul 2>&1
+"%VENV_PY%" -c "import PySide6, pyqtgraph, psutil, websockets, pydantic, cryptography, PyInstaller, pytest, yaml" >nul 2>&1
 if not errorlevel 1 goto deps_ok
 echo       cache miss - resolving dependencies
 

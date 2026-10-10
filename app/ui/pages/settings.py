@@ -261,7 +261,7 @@ class SettingsPage(Page):
         self._fan_slider(card, "settings.gpu_weight", config.thermal_weight_gpu, 0, 1, 0.05, 2, "", "thermal_weight_gpu")
         self._fan_slider(card, "settings.power_weight", config.power_weight, 0, 1, 0.05, 2, "", "power_weight")
         self._fan_slider(card, "settings.load_weight", config.load_weight, 0, 1, 0.05, 2, "", "load_weight")
-        stall = SettingsSpin(minimum=0, maximum=3000, step=50, value=config.stall_rpm_threshold, suffix="RPM")
+        stall = SettingsSpin(minimum=0, maximum=3000, step=50, value=config.stall_rpm_threshold, suffix=self.tr_.t("unit.rpm"))
         stall.changed.connect(lambda v: self._store("fan", stall_rpm_threshold=int(v)))
         self._row(card, "settings.stall_rpm", stall)
 

@@ -291,7 +291,7 @@ class ChartPanel(ThemedWidget):
         self.pause_button.setProperty("variant", "quiet")
         self.pause_button.setCheckable(True)
         self.pause_button.setToolTip(translator.t("common.pause"))
-        self.pause_button.setFixedSize(30, 26)
+        self.pause_button.setFixedSize(40, 26)
         self.pause_button.toggled.connect(self._on_pause)
         header.addWidget(self.pause_button)
         layout.addLayout(header)

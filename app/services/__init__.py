@@ -319,21 +319,21 @@ class ApplicationServices:
     def _probe_cpu(self):
         snapshot = self.telemetry.last_snapshot
         if snapshot is None:
-            return HealthStatus.UNKNOWN, "no telemetry yet"
+            return HealthStatus.UNKNOWN, "health.detail.no_telemetry"
         if snapshot.cpu.temperature is None and snapshot.cpu.usage is None:
-            return HealthStatus.WARNING, "CPU sensors unavailable"
+            return HealthStatus.WARNING, "health.detail.cpu_unavailable"
         return HealthStatus.HEALTHY, f"{snapshot.cpu.temperature or 0:.0f}°C"
 
     def _probe_gpu(self):
         snapshot = self.telemetry.last_snapshot
         if snapshot is None or snapshot.gpu.temperature is None:
-            return HealthStatus.UNKNOWN, "no GPU sensor"
+            return HealthStatus.UNKNOWN, "health.detail.no_gpu"
         return HealthStatus.HEALTHY, f"{snapshot.gpu.temperature:.0f}°C"
 
     def _probe_fan(self):
         status = self.connection.status
         if not status.fan_available:
-            return HealthStatus.UNKNOWN, "no fan data from ESP32"
+            return HealthStatus.UNKNOWN, "health.detail.no_fan"
         if status.fault.value not in ("none", ""):
             return HealthStatus.WARNING, status.fault.value
         return HealthStatus.HEALTHY, f"{status.fan_rpm or 0:.0f} RPM"
@@ -341,10 +341,10 @@ class ApplicationServices:
     def _probe_esp32(self):
         state = self.connection.state
         if state is ConnectionState.CONNECTED:
-            return HealthStatus.HEALTHY, "connected"
+            return HealthStatus.HEALTHY, "health.detail.connected"
         if state in (ConnectionState.CONNECTING, ConnectionState.PAIRING):
             return HealthStatus.WARNING, state.value
-        return HealthStatus.UNKNOWN, "not connected"
+        return HealthStatus.UNKNOWN, "health.detail.not_connected"
 
     def _probe_sensors(self):
         try:
@@ -352,12 +352,12 @@ class ApplicationServices:
         except Exception as exc:  # noqa: BLE001
             return HealthStatus.ERROR, str(exc)
         if not readings:
-            return HealthStatus.WARNING, "no sensors reported"
+            return HealthStatus.WARNING, "health.detail.no_sensors"
         return HealthStatus.HEALTHY, f"{len(readings)} sensors"
 
     def _probe_database(self):
         if self.persistence is None:
-            return HealthStatus.ERROR, self._persistence_error or "unavailable"
+            return HealthStatus.ERROR, self._persistence_error or "health.detail.unavailable"
         ok = self.persistence.integrity_check()
         size_mb = self.persistence.database.size_bytes() / (1024 * 1024)
         return (

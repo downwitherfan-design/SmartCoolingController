@@ -44,7 +44,7 @@ class DiagramPage(Page):
         detail_layout = QVBoxLayout(detail_card)
         detail_layout.setContentsMargins(SPACE["lg"], SPACE["lg"], SPACE["lg"], SPACE["lg"])
         detail_layout.setSpacing(SPACE["sm"])
-        self.detail_header = SectionHeader(self.tr_.t("nav.diagram"))
+        self.detail_header = SectionHeader(_field_label(self.tr_, "esp32"))
         detail_layout.addWidget(self.detail_header)
         self.detail_badge = StatusBadge(self.theme, self.tr_, "", tone="text_faint")
         detail_layout.addWidget(self.detail_badge, 0, Qt.AlignmentFlag.AlignLeft)
@@ -72,13 +72,13 @@ class DiagramPage(Page):
                 widget.deleteLater()
         self.detail_rows.clear()
         for field in NODE_DETAIL_GROUPS.get(key, ()):
-            row = KeyValueRow(_field_label(field), "—", mono=True)
+            row = KeyValueRow(_field_label(self.tr_, field), "—", mono=True)
             self.detail_rows[field] = row
             self.detail_body.addWidget(row)
 
     def _select_node(self, key: str) -> None:
         self._selected = key
-        self.detail_header.set_text(_field_label(key).title())
+        self.detail_header.set_text(_field_label(self.tr_, key))
         self._build_detail_rows(key)
         self.schematic.set_active_node(key)
         if self._last_snapshot is not None:
@@ -87,6 +87,14 @@ class DiagramPage(Page):
     # -- data --------------------------------------------------------------
 
     _last_snapshot: TelemetrySnapshot | None = None
+
+    def retranslate(self) -> None:
+        if not self._built:
+            return
+        self.detail_header.set_text(_field_label(self.tr_, self._selected))
+        self._build_detail_rows(self._selected)
+        if self._last_snapshot is not None:
+            self._fill_detail(self._last_snapshot)
 
     def refresh(self, snapshot: TelemetrySnapshot) -> None:
         self._last_snapshot = snapshot
@@ -168,8 +176,11 @@ class DiagramPage(Page):
         return values
 
 
-def _field_label(field: str) -> str:
-    return field.replace("_", " ").title()
+def _field_label(tr, field: str) -> str:
+    """Translate a node/field identifier, falling back to a title-cased name."""
+    key = f"field.{field.lower()}"
+    translated = tr.t(key)
+    return translated if translated != key else field.replace("_", " ").title()
 
 
 __all__ = ["DiagramPage"]

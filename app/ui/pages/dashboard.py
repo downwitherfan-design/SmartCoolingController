@@ -123,7 +123,11 @@ class DashboardPage(ScrollPage):
             self.theme,
             self.tr_,
             title=self.tr_.t("dash.live_chart"),
-            ranges=[("m1", "1m"), ("m5", "5m"), ("m15", "15m")],
+            ranges=[
+                ("m1", self.tr_.t("history.range.m1")),
+                ("m5", self.tr_.t("history.range.m5")),
+                ("m15", self.tr_.t("history.range.m15")),
+            ],
             capacity=3600,
         )
         self.chart_panel.add_series("cpu", self.tr_.t("dash.cpu"), unit="°C", color_index=0)
@@ -157,7 +161,7 @@ class DashboardPage(ScrollPage):
         health_layout.addWidget(SectionHeader(self.tr_.t("dash.health")))
         self.health_rows: dict[str, KeyValueRow] = {}
         for key in ("cpu", "gpu", "fan", "sensors", "database"):
-            row_widget = KeyValueRow(key.capitalize(), "—")
+            row_widget = KeyValueRow(self.tr_.t(f"health.{key}"), "—")
             self.health_rows[key] = row_widget
             health_layout.addWidget(row_widget)
         side.addWidget(health_card)

@@ -235,8 +235,24 @@ class Schematic(ThemedWidget):
             painter.drawText(
                 QRectF(mid.x() - 40, mid.y() - 18, 80, 16),
                 Qt.AlignmentFlag.AlignCenter,
-                link.label,
+                self._link_label(link.label),
             )
+
+    def _link_label(self, label: str) -> str:
+        """Map a schematic edge tag to a translation, keeping engineering marks."""
+        alias = {
+            "telemetry": "field.telemetry",
+            "wi-fi": "field.wifi",
+            "pwm": "field.pwm",
+            "tach": "field.tach",
+            "rpm": "field.rpm",
+            "temp": "field.temperature",
+            "drive": "link.drive",
+            "i/v/p": "link.ivp",
+        }
+        key = alias.get(label.lower(), f"link.{label.lower()}")
+        translated = self.tr_.t(key)
+        return translated if translated != key else label
 
     def _paint_particles(
         self,
@@ -289,10 +305,14 @@ class Schematic(ThemedWidget):
         title_font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(title_font)
         painter.setPen(QColor(self.theme.palette.text))
+        title_key = f"field.{key.lower()}"
+        title = self.tr_.t(title_key)
+        if title == title_key:
+            title = node.label
         painter.drawText(
             QRectF(rect.left() + 56, rect.top() + 14, rect.width() - 68, 24),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            node.label,
+            title,
         )
 
         subtitle = self._node_subtitle(key)
@@ -315,7 +335,7 @@ class Schematic(ThemedWidget):
                 return self.tr_.t("dash.rpm_unavailable")
             return f"{self.tr_.number(self._fan_rpm, grouping=True)} RPM"
         if key == "wifi":
-            return "online" if self._connected else "idle"
+            return self.tr_.t("conn.connected") if self._connected else self.tr_.t("conn.disconnected")
         return ""
 
     def apply_theme(self) -> None:
