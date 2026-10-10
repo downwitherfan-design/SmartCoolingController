@@ -93,12 +93,41 @@ class Esp32Settings(_Model):
     connect_timeout_s: float = 5.0
     heartbeat_interval_s: float = 1.0
     heartbeat_timeout_s: float = 3.0
+    #: Discovery is bounded: a broadcast window plus an overall scan budget.
+    discovery_timeout_s: float = 2.0
+    discovery_enabled: bool = True
+    #: Bounded exponential backoff with jitter.  The schedule is the base delay
+    #: per attempt; jitter is applied as a fraction of each delay.
     reconnect_backoff_s: list[float] = Field(
         default_factory=lambda: [1.0, 2.0, 4.0, 8.0, 15.0, 30.0]
     )
+    reconnect_jitter: float = 0.25
+    #: A session must stay healthy at least this long before the backoff resets.
+    healthy_reset_s: float = 5.0
     require_authentication: bool = True
     use_websocket: bool = True
     send_interval_ms: int = 500
+
+    @field_validator("heartbeat_interval_s", "heartbeat_timeout_s", "connect_timeout_s")
+    @classmethod
+    def _positive_timeout(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("timeout must be positive")
+        return value
+
+    @field_validator("reconnect_jitter")
+    @classmethod
+    def _bounded_jitter(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("jitter must be between 0 and 1")
+        return value
+
+    @field_validator("reconnect_backoff_s")
+    @classmethod
+    def _valid_backoff(cls, value: list[float]) -> list[float]:
+        if not value or any(delay <= 0 for delay in value):
+            raise ValueError("backoff schedule must contain positive delays")
+        return value
 
 
 class ChartSettings(_Model):

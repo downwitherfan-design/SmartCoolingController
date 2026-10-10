@@ -82,6 +82,9 @@ class ApplicationServices:
             heartbeat_interval_s=self.config.esp32.heartbeat_interval_s,
             heartbeat_timeout_s=self.config.esp32.heartbeat_timeout_s,
             connect_timeout_s=self.config.esp32.connect_timeout_s,
+            backoff_schedule=list(self.config.esp32.reconnect_backoff_s),
+            reconnect_jitter=self.config.esp32.reconnect_jitter,
+            healthy_reset_s=self.config.esp32.healthy_reset_s,
             require_authentication=self.config.esp32.require_authentication,
         )
         self.connection.set_telemetry_supplier(self._telemetry_supplier)

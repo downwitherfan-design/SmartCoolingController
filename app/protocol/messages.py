@@ -279,8 +279,16 @@ def make_command(
     return Packet(MessageType.COMMAND, device_id, time.time(), sequence, data=payload)
 
 
-def make_heartbeat(device_id: str, sequence: int) -> Packet:
-    return Packet(MessageType.HEARTBEAT, device_id, time.time(), sequence)
+def make_heartbeat(device_id: str, sequence: int, *, echo: int | None = None) -> Packet:
+    """Build a heartbeat.
+
+    ``echo`` carries the client sequence number so a compliant peer can echo it
+    back, which is what lets the client measure a *real* round-trip time instead
+    of the spacing between unrelated packets.  Firmware that does not echo simply
+    leaves the client's latency unknown rather than inventing a value.
+    """
+    data: dict[str, Any] = {} if echo is None else {"echo": int(echo)}
+    return Packet(MessageType.HEARTBEAT, device_id, time.time(), sequence, data=data)
 
 
 def make_hello(device_id: str, sequence: int, firmware: str = "") -> Packet:
