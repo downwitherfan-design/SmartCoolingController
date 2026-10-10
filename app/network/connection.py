@@ -90,6 +90,13 @@ _STOPPING = ConnectionState.STOPPING
 _ERROR = ConnectionState.ERROR
 _UNAUTHORIZED = ConnectionState.UNAUTHORIZED
 _MISMATCH = ConnectionState.PROTOCOL_MISMATCH
+
+#: Failure categories that a retry cannot fix; mapped to the terminal state the
+#: manager should settle in so the UI shows an actionable reason, not a spin.
+_FATAL_CATEGORIES: dict[str, ConnectionState] = {
+    "protocol_mismatch": _MISMATCH,
+    "authentication": _UNAUTHORIZED,
+}
 _DISCOVERING = ConnectionState.DISCOVERING
 _PAIRING = ConnectionState.PAIRING
 
@@ -97,7 +104,9 @@ _PAIRING = ConnectionState.PAIRING
 #: DISCONNECTED; everything else is permissive because a reconnect attempt may
 #: legitimately re-enter CONNECTING from any live state.
 VALID_TRANSITIONS: dict[ConnectionState, frozenset[ConnectionState]] = {
-    _DISCONNECTED: frozenset({_DISCOVERING, _CONNECTING, _RECONNECTING, _STOPPING, _ERROR}),
+    _DISCONNECTED: frozenset(
+        {_DISCOVERING, _CONNECTING, _RECONNECTING, _STOPPING, _ERROR, _UNAUTHORIZED, _MISMATCH}
+    ),
     _DISCOVERING: frozenset(
         {_CONNECTING, _DISCONNECTED, _RECONNECTING, _STOPPING, _ERROR}
     ),
@@ -111,10 +120,10 @@ VALID_TRANSITIONS: dict[ConnectionState, frozenset[ConnectionState]] = {
         {_DEGRADED, _STALE, _CONNECTING, _DISCONNECTED, _RECONNECTING, _STOPPING, _ERROR}
     ),
     _DEGRADED: frozenset(
-        {_CONNECTED, _STALE, _CONNECTING, _DISCONNECTED, _RECONNECTING, _STOPPING, _ERROR}
+        {_CONNECTED, _STALE, _CONNECTING, _DISCONNECTED, _RECONNECTING, _STOPPING, _ERROR, _UNAUTHORIZED, _MISMATCH}
     ),
     _STALE: frozenset(
-        {_CONNECTED, _DEGRADED, _CONNECTING, _DISCONNECTED, _RECONNECTING, _STOPPING, _ERROR}
+        {_CONNECTED, _DEGRADED, _CONNECTING, _DISCONNECTED, _RECONNECTING, _STOPPING, _ERROR, _UNAUTHORIZED, _MISMATCH}
     ),
     _RECONNECTING: frozenset({_DISCOVERING, _CONNECTING, _DISCONNECTED, _STOPPING, _ERROR}),
     _STOPPING: frozenset({_DISCONNECTED, _STOPPING}),
@@ -520,6 +529,7 @@ class ConnectionManager:
 
             attempt_started = time.monotonic()
             healthy = False
+            fatal = ""
             try:
                 await self._session(target)
                 healthy = self._session_was_healthy(attempt_started)
@@ -527,10 +537,24 @@ class ConnectionManager:
                 raise
             except _SessionAbort as abort:
                 self._record_failure(str(abort), abort.category)
+                fatal = abort.category
                 healthy = self._session_was_healthy(attempt_started)
             except Exception as exc:  # one failed attempt must not kill the loop
-                self._record_failure(str(exc), _categorise(exc))
+                category = _categorise(exc)
+                self._record_failure(str(exc), category)
+                fatal = category
                 _log.info("ESP32 session ended: %s", exc)
+
+            # A protocol-version or authentication failure will not fix itself
+            # by retrying: surface it and stop until the user acts, instead of
+            # hammering a controller that can never accept us.
+            if fatal in _FATAL_CATEGORIES:
+                with self._lock:
+                    self._want_connect = False
+                    detail = self._diag.last_error
+                self._set_state(_FATAL_CATEGORIES[fatal], detail, epoch=None)
+                _log.warning("ESP32 link halted: %s", detail)
+                continue
 
             with self._lock:
                 still_wanted = self._want_connect and self._desired is not None
@@ -747,6 +771,8 @@ class ConnectionManager:
     # -- packet handling ---------------------------------------------------
 
     def _on_packet(self, raw: bytes, epoch: int) -> None:
+        from app.core.errors import AuthenticationError, ProtocolMismatch
+
         try:
             packet = decode_packet(
                 raw,
@@ -754,6 +780,12 @@ class ConnectionManager:
                 require_signature=bool(self._secret) and self._require_auth,
                 check_clock=False,
             )
+        except ProtocolMismatch as exc:
+            # A peer we can never talk to: abort the session so the run loop
+            # settles in a terminal state instead of silently retrying forever.
+            raise _SessionAbort(str(exc), "protocol_mismatch") from exc
+        except AuthenticationError as exc:
+            raise _SessionAbort(str(exc), "authentication") from exc
         except Exception as exc:
             with self._lock:
                 self._diag.malformed_packets += 1

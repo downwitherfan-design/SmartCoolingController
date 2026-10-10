@@ -169,6 +169,24 @@ def test_malformed_frames_degrade_but_do_not_disconnect(manager: ConnectionManag
     assert _wait_for(lambda: manager.state is ConnectionState.CONNECTED, timeout=3.0)
 
 
+def test_protocol_version_mismatch_is_surfaced_and_not_retried(
+    manager: ConnectionManager,
+) -> None:
+    """A peer speaking a different protocol must not be accepted or hammered."""
+    device, _mock = _start_mock(manager, port=8822, bad_version=True)
+    manager.connect_device(device)
+    assert _wait_for(
+        lambda: manager.state is ConnectionState.PROTOCOL_MISMATCH, timeout=6.0
+    )
+    assert manager.state is not ConnectionState.CONNECTED
+    assert manager.status.fan_available is False
+    # A mismatch cannot be fixed by retrying: prove the loop settles.
+    sessions = manager.diagnostics.sessions_started
+    time.sleep(1.0)
+    assert manager.diagnostics.sessions_started == sessions
+    assert manager.state is ConnectionState.PROTOCOL_MISMATCH
+
+
 def test_server_drop_causes_reconnect_and_recovery(manager: ConnectionManager) -> None:
     device, mock = _start_mock(manager, port=8820)
     manager.connect_device(device)
