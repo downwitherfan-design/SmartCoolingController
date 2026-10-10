@@ -296,6 +296,12 @@ class CoolingController:
     ) -> CoolingDecision:
         low = self._limits.min_pwm
         high = self._limits.max_pwm
+        if safety_override:
+            # A safety override is never subject to the profile envelope: a
+            # profile whose max_pwm is below the emergency duty would otherwise
+            # cap the emergency response.  Only the absolute [0, 100] envelope
+            # applies, and the firmware remains the final authority (spec §47).
+            low, high = 0.0, 100.0
         clamped_value = clamp(desired, low, high)
         clamped_value = clamp(clamped_value, 0.0, 100.0)
         return CoolingDecision(

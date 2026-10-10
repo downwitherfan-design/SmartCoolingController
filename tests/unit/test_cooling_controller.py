@@ -97,6 +97,32 @@ def test_safe_mode_runs_the_fan_at_maximum(controller: CoolingController) -> Non
     assert decision.safety_override is True
 
 
+def test_safe_mode_ignores_a_capped_profile_envelope() -> None:
+    # Regression: a profile with a low max_pwm used to clamp the safety
+    # override, so "safe mode" could command well below full speed.
+    ctrl = CoolingController(EventBus())
+    ctrl.set_profile(_profile(min_pwm=0, max_pwm=25))
+    ctrl.set_mode(ControllerMode.SAFE)
+    assert ctrl.update(_snapshot(40)).target_pwm == pytest.approx(100.0)
+
+
+def test_critical_temperature_ignores_a_capped_profile_envelope() -> None:
+    # Same safety-override defect on the automatic path: an over-temperature
+    # must reach the absolute envelope, not the profile's ceiling.
+    ctrl = CoolingController(EventBus())
+    ctrl.set_profile(_profile(min_pwm=0, max_pwm=20))
+    decision = ctrl.update(_snapshot(101))
+    assert decision.target_pwm == pytest.approx(100.0)
+    assert decision.safety_override is True
+
+
+def test_safety_override_still_respects_the_absolute_envelope() -> None:
+    ctrl = CoolingController(EventBus(), limits=SafetyLimits(emergency_pwm=120.0))
+    ctrl.set_mode(ControllerMode.SAFE)
+    assert ctrl.update(_snapshot(40)).target_pwm == pytest.approx(100.0)
+
+
+
 def test_manual_pwm_is_clamped_to_the_hard_limits() -> None:
     ctrl = CoolingController(EventBus(), limits=SafetyLimits(min_pwm=20, max_pwm=80))
     ctrl.set_mode(ControllerMode.MANUAL)
