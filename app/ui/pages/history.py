@@ -33,6 +33,22 @@ RANGES = [
     ("d7", "history.range.week", 168.0, 900),
 ]
 
+#: Maps the persisted :class:`ChartRange` value onto a history preset, so the
+#: "default range" setting actually selects the opening view.  Ranges the page
+#: does not offer fall back to the hour preset rather than an invalid key.
+_RANGE_BY_SETTING = {
+    "1h": "h1",
+    "6h": "h1",
+    "24h": "h24",
+    "7d": "d7",
+    "1m": "h1",
+    "5m": "h1",
+    "15m": "h1",
+    "30m": "h1",
+}
+
+DEFAULT_RANGE = "h1"
+
 MAX_ROWS = 20_000
 
 
@@ -75,12 +91,15 @@ class HistoryPage(Page):
             title=self.tr_.t("history.title"),
             ranges=[(key, self.tr_.t(label)) for key, label, _, _ in RANGES],
             capacity=MAX_ROWS,
+            series_visibility=self.services.config.charts.series_visibility,
         )
         self.chart_panel.add_series("cpu", self.tr_.t("dash.cpu"), unit="°C", color_index=0)
         self.chart_panel.add_series("gpu", self.tr_.t("dash.gpu"), unit="°C", color_index=1)
         self.chart_panel.add_series("fan", self.tr_.t("dash.fan_pwm"), unit="%", color_index=2)
         self.chart_panel.setMinimumHeight(360)
         self.chart_panel.chart.range_changed.connect(self.reload)
+        self.chart_panel.series_visibility_changed.connect(self._on_series_visibility)
+        self._apply_chart_settings()
         layout.addWidget(self.chart_panel, 1)
 
         detail_card = Card()
@@ -105,15 +124,34 @@ class HistoryPage(Page):
         self.empty = EmptyState(self.theme, self.tr_, icon_name="history", title=self.tr_.t("common.empty"))
         layout.addWidget(self.empty)
 
-        self._range = "h1"
+        self._range = DEFAULT_RANGE
+        self._shown_once = False
         self._last_stats: dict[str, float | None] = {}
 
     # -- data --------------------------------------------------------------
 
+    def _apply_chart_settings(self) -> None:
+        chart = self.services.config.charts
+        self.chart_panel.apply_display_settings(
+            auto_scale=chart.auto_scale, show_grid=chart.show_grid, show_legend=chart.show_legend
+        )
+
+    def _on_series_visibility(self, key: str, visible: bool) -> None:
+        state = dict(self.services.config.charts.series_visibility)
+        state[key] = visible
+        self.services.update_config(charts={"series_visibility": state})
+
     def on_shown(self) -> None:
+        # Honour the persisted default range the first time the page appears;
+        # afterwards the user's in-session choice wins.
+        if not self._shown_once:
+            self._shown_once = True
+            self._range = _RANGE_BY_SETTING.get(
+                self.services.config.charts.default_range.value, DEFAULT_RANGE
+            )
         self.reload(self._range)
 
-    def reload(self, range_key: str = "h1") -> None:
+    def reload(self, range_key: str = DEFAULT_RANGE) -> None:
         self._range = range_key
         self.chart_panel.set_range_active(range_key)
         preset = next((r for r in RANGES if r[0] == range_key), RANGES[0])

@@ -74,6 +74,8 @@ class LiveChart(ThemedWidget):
         self._marker_items: list[pg.InfiniteLine] = []
         self._paused = False
         self._auto_scale = True
+        self._show_grid = True
+        self._legend_visible = True
         self._legend: pg.LegendItem | None = None
 
         pg.setConfigOptions(antialias=True)
@@ -183,6 +185,15 @@ class LiveChart(ThemedWidget):
         self._auto_scale = enabled
         self.plot.enableAutoRange(y=enabled)
 
+    def set_grid_visible(self, enabled: bool) -> None:
+        self._show_grid = enabled
+        self.plot.showGrid(x=enabled, y=enabled, alpha=0.15)
+
+    def set_legend_visible(self, enabled: bool) -> None:
+        self._legend_visible = enabled
+        if self._legend is not None:
+            self._legend.setVisible(enabled)
+
     # -- markers -----------------------------------------------------------
 
     def add_marker(self, marker: EventMarker) -> None:
@@ -260,6 +271,9 @@ class LiveChart(ThemedWidget):
 class ChartPanel(ThemedWidget):
     """A chart with a title, range selector, stats and a pause toggle."""
 
+    #: Emitted when the user toggles a series, so a page can persist the choice.
+    series_visibility_changed = Signal(str, bool)
+
     def __init__(
         self,
         theme: Theme,
@@ -268,9 +282,13 @@ class ChartPanel(ThemedWidget):
         title: str = "",
         ranges: list[tuple[str, str]] | None = None,
         capacity: int = 3600,
+        series_visibility: dict[str, bool] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(theme, translator, parent)
+        #: Which series start hidden.  Seeded from the persisted setting so the
+        #: user's chart choices survive a restart instead of being cosmetic.
+        self._series_visibility: dict[str, bool] = dict(series_visibility or {})
         self.setObjectName("card")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -325,13 +343,29 @@ class ChartPanel(ThemedWidget):
         button = QPushButton(label)
         button.setProperty("segmented", "true")
         button.setCheckable(True)
-        button.setChecked(True)
+        # Default to visible unless the persisted setting says otherwise.
+        visible = self._series_visibility.get(key, True)
+        button.setChecked(visible)
         button.setProperty("variant", "quiet")
-        button.toggled.connect(lambda checked, k=key: self.chart.set_series_visible(k, checked))
+        self.chart.set_series_visible(key, visible)
+        button.toggled.connect(lambda checked, k=key: self._on_series_toggled(k, checked))
         color = self.theme.series_color(color_index if color_index is not None else len(self._series_buttons))
         button.setStyleSheet(f"QPushButton:checked {{ color: {color}; border-color: {color}; }}")
         self.series_bar.addWidget(button)
         self._series_buttons[key] = button
+
+    def _on_series_toggled(self, key: str, visible: bool) -> None:
+        self.chart.set_series_visible(key, visible)
+        self._series_visibility[key] = visible
+        self.series_visibility_changed.emit(key, visible)
+
+    def apply_display_settings(
+        self, *, auto_scale: bool = True, show_grid: bool = True, show_legend: bool = True
+    ) -> None:
+        """Apply the persisted chart-display preferences to the live plot."""
+        self.chart.set_auto_scale(auto_scale)
+        self.chart.set_grid_visible(show_grid)
+        self.chart.set_legend_visible(show_legend)
 
     def _select_range(self, key: str) -> None:
         for name, button in self._range_buttons.items():
