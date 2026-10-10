@@ -94,7 +94,8 @@ class AnomalyDetector:
         rpm = snapshot.fan.rpm
         if rpm is not None and self._last_rpm is not None:
             target = snapshot.fan.target_percent
-            if target is not None and target >= 40.0 and rpm < self._last_rpm * 0.5:
+            ratio = self.thresholds.unexpected_rpm_ratio_low
+            if target is not None and target >= 40.0 and rpm < self._last_rpm * ratio:
                 anomalies.append(
                     Anomaly(
                         kind=AnomalyKind.UNEXPECTED_RPM,
