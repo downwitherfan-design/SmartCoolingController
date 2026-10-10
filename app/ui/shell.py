@@ -708,6 +708,7 @@ class MainWindow(QMainWindow):
         with contextlib.suppress(Exception):
             self.tray.hide()
         self.services.shutdown()
+        MainWindow._instance = None
         app = QApplication.instance()
         if app is not None:
             app.quit()
