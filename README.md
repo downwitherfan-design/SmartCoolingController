@@ -4,8 +4,8 @@ Windows-side telemetry and control application for an intelligent laptop
 cooling pad built around an ESP32 and a 4-wire PWM fan.
 
 The desktop app talks to the pad over a small JSON protocol (WebSocket or
-serial), streams temperature/RPM/power telemetry into live charts, applies
-thermal profiles, and keeps a local history for later export.
+length-prefixed TCP), streams temperature/RPM/power telemetry into live charts,
+applies thermal profiles, and keeps a local history for later export.
 
 ## Features
 
@@ -14,8 +14,12 @@ thermal profiles, and keeps a local history for later export.
 - **Thermal profiles** — built-in `silent` / `balanced` / `performance` /
   `turbo` curves plus custom fan curves, with hysteresis and ramp limiting so
   the fan never hunts.
-- **ESP32 link** — automatic discovery, reconnect with backoff, and a versioned
+- **Reliable ESP32 link** — automatic discovery, a connection state machine with
+  enforced heartbeat timeouts and jittered exponential backoff, and a versioned
   protocol so firmware and app can evolve independently.
+- **Truthful diagnostics** — the wiring diagram, link animation and Wi-Fi node
+  are driven by real connection health (state, RSSI, latency, packet loss), not
+  by a fabricated "online".
 - **Safety first** — a crash guard that clears its marker on graceful exit,
   safe-mode start-up, and hardware back-off when a sensor goes stale.
 - **Privacy by default** — logs and exported support bundles pass through a
@@ -33,9 +37,9 @@ attached to this repository's **Releases** page. The latest release lives at:
 
 | File | What it is | Direct link |
 | --- | --- | --- |
-| `SmartCoolingController-1.0.0-setup.exe` | The **installer**. Download, double-click, done. No Python, no administrator rights (per-user install). | `.../releases/latest/download/SmartCoolingController-1.0.0-setup.exe` |
-| `SmartCoolingController-1.0.0-windows-x86_64.zip` | The **portable** build. Unzip and run `SmartCoolingController.exe`; nothing is installed. | `.../releases/latest/download/SmartCoolingController-1.0.0-windows-x86_64.zip` |
-| `SmartCoolingController-1.0.0-source.zip` | Full source, buildable with the pinned toolchain. | `.../releases/latest/download/SmartCoolingController-1.0.0-source.zip` |
+| `SmartCoolingController-2.0.0-setup.exe` | The **installer**. Download, double-click, done. No Python, no administrator rights (per-user install). | `.../releases/latest/download/SmartCoolingController-2.0.0-setup.exe` |
+| `SmartCoolingController-2.0.0-windows-x86_64.zip` | The **portable** build. Unzip and run `SmartCoolingController.exe`; nothing is installed. | `.../releases/latest/download/SmartCoolingController-2.0.0-windows-x86_64.zip` |
+| `SmartCoolingController-2.0.0-source.zip` | Full source, buildable with the pinned toolchain. | `.../releases/latest/download/SmartCoolingController-2.0.0-source.zip` |
 
 Verify a download before running it with
 `Get-FileHash <file> -Algorithm SHA256` and compare against `checksums.sha256`

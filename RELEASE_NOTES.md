@@ -1,8 +1,26 @@
-## SmartCooling Controller
+## SmartCooling Controller 2.0
 
 A Windows desktop app for a DIY ESP32 laptop-cooling pad: live temperature and
 fan-RPM telemetry, automatic fan curves, a wiring schematic and diagnostics.
 Built with PySide6/Qt, pyqtgraph, psutil and websockets.
+
+**What is new in 2.0** — the connection layer was rebuilt and made honest:
+
+- **Reliable ESP32 link.** A proper connection state machine (discovering →
+  connecting → connected → degraded → stale → reconnecting) with a session
+  guard, enforced heartbeat timeouts, and jittered exponential backoff instead
+  of a constant one-second reconnect loop. A device that accepts a socket and
+  immediately drops no longer makes the app spin.
+- **The diagram tells the truth.** The link animation now reflects real health:
+  solid flow when connected, slower when degraded, frozen and dimmed when stale,
+  idle when disconnected — no packets are implied when none arrive. The Wi-Fi
+  node shows the real status, RSSI, latency and packet loss.
+- **Harder shutdown.** One failing subsystem can no longer leak a thread, skip
+  the database flush, or leave a dead window behind.
+- **Safer logs.** URL-embedded passwords and webhook tokens are redacted before
+  they can reach a log file or a support bundle.
+- **More tests.** A deterministic fake ESP32 with fault injection, plus
+  coverage that builds and renders every screen in English and Persian.
 
 ### Download and run (Windows 10/11, 64-bit)
 
@@ -20,10 +38,26 @@ Built with PySide6/Qt, pyqtgraph, psutil and websockets.
 
 No Python installation is required for either option.
 
+### راهنمای نصب (فارسی)
+
+**نصب یک‌کلیکی (پیشنهادی)**
+
+1. فایل **`...-setup.exe`** را از بخش Assets همین صفحه دانلود کنید.
+2. روی آن دوبار کلیک کنید؛ برنامه فقط برای کاربر جاری نصب می‌شود و به رمز
+   مدیر (Administrator) نیازی نیست.
+3. از منوی Start برنامه **Smart Cooling Controller** را اجرا کنید.
+
+**نسخهٔ همراه (بدون نصب)**
+
+1. فایل **`...-windows-x86_64.zip`** را دانلود کنید.
+2. هر جایی که خواستید باز کنید و فایل `SmartCoolingController.exe` را اجرا کنید.
+
+در هیچ‌کدام از این دو روش نیازی به نصب پایتون نیست.
+
 ### Verify your download (optional)
 
 ```powershell
-Get-FileHash .\SmartCoolingController-1.0.0-setup.exe -Algorithm SHA256
+Get-FileHash .\SmartCoolingController-2.0.0-setup.exe -Algorithm SHA256
 ```
 
 Compare the result with `checksums.sha256` on this release.

@@ -92,18 +92,28 @@ non-obvious choice.
 - [PASS] Leak/stress: repeated connect/disconnect cycles, no leaked tasks,
   no duplicate callbacks, bounded buffers.
 
-## Phase 4 — V2 features
+## Phase 4 — V2 improvements
 
-- [TODO] Connection Center, diagnostics action, cooling, history/charts,
-  hardware status, alerts/i18n.
+- [PASS] Shutdown isolation: each teardown step guarded, so one failing
+  subsystem cannot leak a thread or skip the persistence drain.
+- [PASS] Window singleton reset on shutdown (a dead window can no longer be
+  handed back by `create_window`).
+- [PASS] Wi-Fi/ESP32 UI truth (Phase 2) and all-page smoke coverage.
+- [PASS] i18n additions (`common.online`/`common.offline`/`field.rssi`, EN+FA).
 
 ## Phase 5 — Performance, security, recovery
 
-- [TODO] Main-thread blocking, leaks, SQLite, redaction, shutdown, packaging.
+- [PASS] Log redaction broadened to URL-embedded credentials and webhook tokens.
+- [PASS] Shutdown idempotency/resilience covered by an integration test.
+- [PASS] Full-window smoke test renders every page off-screen in EN and FA.
 
 ## Phase 6 — Quality gates & release
 
-- [TODO] Full gates + README/version/changelog.
+- [PASS] Full gates green: ruff, mypy (93 files), pytest (all passing),
+  `run.py --headless` boots and exits 0.
+- [PASS] Version bumped to 2.0.0 across app, pyproject, spec, iss and version info.
+- [PASS] Windows installer workflow green on the `v2/connection-reliability` PR
+  (real Windows runner compiles `setup.exe` and the portable bundle).
 
 ## Hardware tests pending (need a physical ESP32)
 

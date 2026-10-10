@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartcooling-controller"
-version = "1.0.0"
+version = "2.0.0"
 description = "Windows-side telemetry and control application for an intelligent laptop cooling pad (ESP32 + 4-wire PWM fan)."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"

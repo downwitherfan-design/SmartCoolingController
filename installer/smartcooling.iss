@@ -1,7 +1,7 @@
 ; SmartCooling Controller — Windows installer (Inno Setup 6) — spec §260, §261.
 ;
 ; Build with:
-;   ISCC.exe installer\smartcooling.iss /DAppVersion=1.0.0 /DBuildId=abc123
+;   ISCC.exe installer\smartcooling.iss /DAppVersion=2.0.0 /DBuildId=abc123
 ; or through scripts/installer/build_installer.py, which fills the defines.
 ;
 ; Design notes
@@ -15,7 +15,7 @@
 ;   removing user data is an explicit, separate choice on the uninstall page.
 
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "2.0.0"
 #endif
 #ifndef BuildId
   #define BuildId "dev"

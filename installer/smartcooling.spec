@@ -26,7 +26,7 @@ ROOT = SPEC_DIR.parent
 # The build script exports these before invoking PyInstaller; the defaults keep
 # a manual ``pyinstaller installer/smartcooling.spec`` run working.
 BUILD_ID = os.environ.get("SMARTCOOLING_BUILD_ID", "dev")
-APP_VERSION = os.environ.get("SMARTCOOLING_APP_VERSION", "1.0.0")
+APP_VERSION = os.environ.get("SMARTCOOLING_APP_VERSION", "2.0.0")
 
 # --- hidden imports --------------------------------------------------------
 # These packages resolve parts of themselves at runtime (plugins, backends or
