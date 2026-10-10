@@ -27,8 +27,7 @@ thermal profiles, and keeps a local history for later export.
 
 The one-click installer and the portable build are produced on every tag by the
 [Windows installer workflow](.github/workflows/windows-installer.yml) and
-attached to the [Releases](https://github.com/downwitherfan-design/SmartCoolingController/releases)
-page:
+attached to this repository's **Releases** page:
 
 - **`SmartCoolingController-1.0.0-setup.exe`** — the installer. Download it,
   double-click, done. No Python, no administrator rights (per-user install).
