@@ -441,6 +441,9 @@ _EN: dict[str, str] = {
     "conn.unauthorized": "Unauthorized",
     "conn.protocol_mismatch": "Protocol mismatch",
     "conn.error": "Error",
+    "conn.discovering": "Discovering",
+    "conn.reconnecting": "Reconnecting",
+    "conn.stopping": "Stopping",
     "fan.state.stopped": "Stopped",
     "fan.state.starting": "Starting",
     "fan.state.running": "Running",
@@ -848,6 +851,9 @@ _FA: dict[str, str] = {
     "conn.unauthorized": "غیرمجاز",
     "conn.protocol_mismatch": "ناسازگاری پروتکل",
     "conn.error": "خطا",
+    "conn.discovering": "در حال جست‌وجو",
+    "conn.reconnecting": "در حال اتصال مجدد",
+    "conn.stopping": "در حال توقف",
     "fan.state.stopped": "متوقف",
     "fan.state.starting": "در حال راه‌اندازی",
     "fan.state.running": "در حال کار",
@@ -1039,7 +1045,7 @@ class Translator:
     """Runtime translator with locale-aware number formatting."""
 
     def __init__(self, language: Language = Language.ENGLISH) -> None:
-        self._language = language
+        self._language = _coerce_language(language)
 
     @property
     def language(self) -> Language:
@@ -1050,7 +1056,7 @@ class Translator:
         return self._language is Language.PERSIAN
 
     def set_language(self, language: Language) -> None:
-        self._language = language
+        self._language = _coerce_language(language)
 
     def t(self, key: str, **params: object) -> str:
         """Translate ``key``; unknown keys return the key itself."""
@@ -1073,6 +1079,22 @@ class Translator:
         if self._language is Language.PERSIAN:
             text = text.translate(str.maketrans("0123456789,", "۰۱۲۳۴۵۶۷۸۹٬"))
         return text
+
+
+def _coerce_language(language: Language | str) -> Language:
+    """Normalise ``language`` to a :class:`Language`.
+
+    Callers throughout the codebase pass ``"en"``/``"fa"`` string literals.
+    Because :class:`Language` is a ``StrEnum`` those compare equal by value, but
+    identity checks (``is``) would fail — so every entry point coerces here and
+    the rest of the class may rely on identity.
+    """
+    if isinstance(language, Language):
+        return language
+    try:
+        return Language(str(language).strip().lower())
+    except ValueError:
+        return Language.ENGLISH
 
 
 __all__ = ["Translator", "TOPIC_LANGUAGE"]

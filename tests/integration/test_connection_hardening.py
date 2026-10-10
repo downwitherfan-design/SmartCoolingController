@@ -124,3 +124,57 @@ def test_connect_to_a_new_device_replaces_the_active_session(
         assert _wait_for(lambda: manager.state is ConnectionState.CONNECTED, timeout=8.0)
     finally:
         manager.stop(timeout=5.0)
+
+
+def _thread_count() -> int:
+    import threading
+
+    return threading.active_count()
+
+
+def test_repeated_faults_do_not_leak_threads_or_sessions(bus: EventBus) -> None:
+    """Many connect/disconnect cycles across a flapping peer stay bounded.
+
+    A stress guard for the reliability path: the manager must not spawn a
+    thread or a session per fault, and each cycle must still settle to
+    DISCONNECTED.  This is the "more commands, transitions and long-duration
+    operation" requirement without a real multi-hour soak.
+    """
+    before = _thread_count()
+    mgr = ConnectionManager(
+        bus,
+        use_websocket=True,
+        heartbeat_interval_s=0.1,
+        heartbeat_timeout_s=0.35,
+        connect_timeout_s=1.0,
+        backoff_schedule=[0.02, 0.05],
+        reconnect_jitter=0.0,
+        healthy_reset_s=0.05,
+    )
+    try:
+        device = mgr.enable_mock(host="127.0.0.1", port=8845)
+        mock = mgr._mock
+        assert mock is not None
+        mock.malformed_every = 4
+        for cycle in range(12):
+            mgr.connect_device(device)
+            assert _wait_for(lambda: mgr.state is ConnectionState.CONNECTED, timeout=6.0)
+            # Fault: half the cycles flap the peer before we disconnect.
+            if cycle % 2 == 0:
+                mock.silent = True
+                assert _wait_for(
+                    lambda: mgr.diagnostics.heartbeat_timeouts > 0, timeout=6.0
+                )
+                mock.silent = False
+            mgr.disconnect()
+            assert _wait_for(lambda: mgr.state is ConnectionState.DISCONNECTED, timeout=5.0)
+        assert mock.has_listener
+        assert mock.client_count <= 1
+    finally:
+        mgr.stop(timeout=5.0)
+    # The connection thread and the mock's server tasks must be released,
+    # allowing for thread-scheduler latency in CI.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and _thread_count() > before:
+        time.sleep(0.05)
+    assert _thread_count() <= before + 1
