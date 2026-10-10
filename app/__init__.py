@@ -16,7 +16,7 @@ APP_SLUG = "SmartCoolingController"
 APP_ORGANIZATION = "SmartCooling"
 
 #: Semantic version of the desktop application.
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.0"
 
 #: Version of the on-the-wire ESP32 protocol implemented by this build.
 PROTOCOL_VERSION = 1

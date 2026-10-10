@@ -194,14 +194,36 @@ class FanControlSource(StrEnum):
 
 class ConnectionState(StrEnum):
     DISCONNECTED = "disconnected"
+    DISCOVERING = "discovering"
     CONNECTING = "connecting"
     PAIRING = "pairing"
     CONNECTED = "connected"
     DEGRADED = "degraded"
     STALE = "stale"
+    RECONNECTING = "reconnecting"
+    STOPPING = "stopping"
     UNAUTHORIZED = "unauthorized"
     PROTOCOL_MISMATCH = "protocol_mismatch"
     ERROR = "error"
+
+
+#: The states in which a session is either being established or already live.
+#: Used to reject duplicate connect requests and to decide when a new request
+#: must pre-empt the current one.
+ACTIVE_CONNECTION_STATES = frozenset(
+    {
+        ConnectionState.DISCOVERING,
+        ConnectionState.CONNECTING,
+        ConnectionState.PAIRING,
+        ConnectionState.CONNECTED,
+        ConnectionState.DEGRADED,
+        ConnectionState.STALE,
+        ConnectionState.RECONNECTING,
+    }
+)
+
+#: States that mean "a link is up and we can trust freshly-received telemetry".
+LIVE_CONNECTION_STATES = frozenset({ConnectionState.CONNECTED})
 
 
 class MessageType(StrEnum):
@@ -380,7 +402,8 @@ __all__ = [name for name in dir() if name.endswith(("Enum",)) or name in {
     "BackendKind", "BackendStatus", "SensorType", "HardwareCategory",
     "MetricState", "DataProvenance", "MetricKey", "ThermalState",
     "ThermalTrend", "FanState", "FanResponseState", "FanControlSource",
-    "ConnectionState", "MessageType", "ControllerMode", "FaultState",
+    "ConnectionState", "ACTIVE_CONNECTION_STATES", "LIVE_CONNECTION_STATES",
+    "MessageType", "ControllerMode", "FaultState",
     "CoolingProfileKind", "AlertSeverity", "AlertCategory", "AnomalyKind",
     "SessionState", "HealthStatus", "ThemeMode", "Language", "DataMode",
     "PerformanceMode", "AnimationLevel", "PageId", "ExportFormat",

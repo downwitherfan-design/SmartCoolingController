@@ -17,6 +17,20 @@ from app.ui.pages.base import Page
 from app.ui.widgets.atoms import Card, KeyValueRow, SectionHeader, StatusBadge
 from app.ui.widgets.schematic import NODE_DETAIL_GROUPS, Schematic
 
+#: Tone used for the connection badge on the diagram detail panel.
+_STATE_TONES: dict[ConnectionState, str] = {
+    ConnectionState.CONNECTED: "success",
+    ConnectionState.DEGRADED: "warning",
+    ConnectionState.STALE: "warning",
+    ConnectionState.PAIRING: "info",
+    ConnectionState.CONNECTING: "info",
+    ConnectionState.DISCOVERING: "info",
+    ConnectionState.RECONNECTING: "info",
+    ConnectionState.PROTOCOL_MISMATCH: "danger",
+    ConnectionState.UNAUTHORIZED: "danger",
+    ConnectionState.ERROR: "danger",
+}
+
 
 class DiagramPage(Page):
     key = "diagram"
@@ -101,7 +115,16 @@ class DiagramPage(Page):
         fan = snapshot.fan
         state = self.services.connection.state if hasattr(self.services.connection, "state") else ConnectionState.DISCONNECTED
         self.schematic.set_link_state(state, fan_state=fan.state, rpm=fan.rpm)
+        self.detail_badge.set_status(
+            self.tr_.t(f"conn.{state.value}"), _STATE_TONES.get(state, "text_faint")
+        )
         self._fill_detail(snapshot)
+
+    def teardown(self) -> None:
+        # The schematic runs a 33 ms timer; stop it before the page (and its
+        # language-switch rebuild) drops the widget, or it keeps firing.
+        self.schematic.stop_animation()
+        super().teardown()
 
     def _fill_detail(self, snapshot: TelemetrySnapshot) -> None:
         values = self._node_values(self._selected, snapshot)
@@ -154,7 +177,23 @@ class DiagramPage(Page):
                 "state": self.tr_.t(f"conn.{conn.state.value}"),
             }
         elif key == "wifi":
-            values = {"status": "online", "latency": "—", "packets": "—"}
+            # Never fabricate "online": the Wi-Fi node is only up when the link
+            # is actually delivering telemetry, and RSSI/latency come from the
+            # controller's real readings.
+            status = conn.status
+            online = conn.state is ConnectionState.CONNECTED and status.wifi_rssi_dbm is not None
+            values = {
+                "status": self.tr_.t("common.online") if online else self.tr_.t("common.offline"),
+                "rssi": f"{num(status.wifi_rssi_dbm, decimals=0)} dBm"
+                if status.wifi_rssi_dbm is not None
+                else "—",
+                "latency": f"{num(status.latency_ms, decimals=1)} ms"
+                if status.latency_ms is not None
+                else "—",
+                "packets": f"{num(status.packet_loss_percent, decimals=1)} %"
+                if status.packet_loss_percent is not None
+                else "—",
+            }
         elif key == "ina219":
             values = {
                 "voltage": f"{num(fan.voltage_v, decimals=2)} V" if fan.voltage_v is not None else "—",

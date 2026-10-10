@@ -64,10 +64,17 @@ class Transport(ABC):
 
 
 class WebSocketTransport(Transport):
-    """WebSocket client transport."""
+    """WebSocket client transport.
+
+    ``websockets`` forbids concurrent ``send`` calls, and the connection manager
+    drives two independent loops (heartbeat + telemetry) that both write.  A
+    per-transport lock serialises writes so a command can never interleave with
+    a heartbeat frame on the wire.
+    """
 
     def __init__(self) -> None:
         self._connection: ClientConnection | None = None
+        self._send_lock = asyncio.Lock()
 
     @property
     def connected(self) -> bool:
@@ -86,10 +93,14 @@ class WebSocketTransport(Transport):
     async def send(self, payload: bytes) -> None:
         if self._connection is None:
             raise NetworkError("websocket is not connected")
-        try:
-            await self._connection.send(payload)
-        except Exception as exc:
-            raise NetworkError(f"websocket send failed: {exc}") from exc
+        async with self._send_lock:
+            connection = self._connection
+            if connection is None:
+                raise NetworkError("websocket closed during send")
+            try:
+                await connection.send(payload)
+            except Exception as exc:
+                raise NetworkError(f"websocket send failed: {exc}") from exc
 
     async def receive(self, *, timeout: float | None = None) -> bytes | None:
         if self._connection is None:
@@ -105,10 +116,11 @@ class WebSocketTransport(Transport):
         return message
 
     async def close(self) -> None:
-        if self._connection is not None:
-            with contextlib.suppress(Exception):
-                await self._connection.close()
-            self._connection = None
+        connection, self._connection = self._connection, None
+        if connection is not None:
+            async with self._send_lock:
+                with contextlib.suppress(Exception):
+                    await connection.close()
 
 
 class TcpTransport(Transport):
@@ -117,6 +129,7 @@ class TcpTransport(Transport):
     def __init__(self) -> None:
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        self._send_lock = asyncio.Lock()
 
     @property
     def connected(self) -> bool:
@@ -132,15 +145,17 @@ class TcpTransport(Transport):
             raise NetworkError(f"tcp connect to {host}:{port} failed: {exc}") from exc
 
     async def send(self, payload: bytes) -> None:
-        if self._writer is None:
-            raise NetworkError("tcp is not connected")
         if len(payload) > _MAX_FRAME:
             raise NetworkError("frame too large")
-        try:
-            self._writer.write(_FRAME_HEADER.pack(len(payload)) + payload)
-            await self._writer.drain()
-        except Exception as exc:
-            raise NetworkError(f"tcp send failed: {exc}") from exc
+        async with self._send_lock:
+            writer = self._writer
+            if writer is None:
+                raise NetworkError("tcp is not connected")
+            try:
+                writer.write(_FRAME_HEADER.pack(len(payload)) + payload)
+                await writer.drain()
+            except Exception as exc:
+                raise NetworkError(f"tcp send failed: {exc}") from exc
 
     async def receive(self, *, timeout: float | None = None) -> bytes | None:
         if self._reader is None:
@@ -161,12 +176,13 @@ class TcpTransport(Transport):
             raise NetworkError(f"tcp receive failed: {exc}") from exc
 
     async def close(self) -> None:
-        if self._writer is not None:
-            with contextlib.suppress(Exception):
-                self._writer.close()
-                await self._writer.wait_closed()
-            self._writer = None
+        writer, self._writer = self._writer, None
         self._reader = None
+        if writer is not None:
+            async with self._send_lock:
+                with contextlib.suppress(Exception):
+                    writer.close()
+                    await writer.wait_closed()
 
 
 def create_transport(use_websocket: bool) -> Transport:

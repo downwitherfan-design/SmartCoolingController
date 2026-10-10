@@ -6,11 +6,17 @@ from app.network.connection import (
     TOPIC_DEVICE,
     TOPIC_STATE,
     TOPIC_STATUS,
+    VALID_TRANSITIONS,
+    ConnectionDiagnostics,
     ConnectionManager,
+    can_transition,
 )
 
 __all__ = [
     "ConnectionManager",
+    "ConnectionDiagnostics",
+    "can_transition",
+    "VALID_TRANSITIONS",
     "TOPIC_STATE",
     "TOPIC_STATUS",
     "TOPIC_DEVICE",

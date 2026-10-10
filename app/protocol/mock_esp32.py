@@ -75,6 +75,20 @@ class MockEsp32:
         self._fault = FaultState.NONE
         self._last_command = time.time()
 
+        # -- deterministic fault injection (used by the test harness) --------
+        #: Accept connections but never answer: exercises heartbeat timeout.
+        self.silent = False
+        #: Close the client after this many outbound packets (0 = disabled).
+        self.drop_after_packets = 0
+        #: Delay the first status response by this many seconds.
+        self.delay_first_status_s = 0.0
+        #: Emit a malformed (non-JSON) frame every Nth packet (0 = disabled).
+        self.malformed_every = 0
+        #: Answer with an incompatible protocol version.
+        self.bad_version = False
+        self._sent_packets = 0
+        self._first_status_sent = False
+
     # -- lifecycle ---------------------------------------------------------
 
     async def start(self) -> None:
@@ -118,6 +132,11 @@ class MockEsp32:
             self._server = None
         _log.info("mock ESP32 stopped")
 
+    async def restart(self) -> None:
+        """Stop and immediately re-listen — models a controller reboot."""
+        await self.stop()
+        await self.start()
+
     # -- thread helpers ----------------------------------------------------
 
     def start_in_thread(self) -> None:
@@ -142,6 +161,16 @@ class MockEsp32:
 
     # -- controls ----------------------------------------------------------
 
+    @property
+    def has_listener(self) -> bool:
+        """Whether the server still owns a listening socket (leak check)."""
+        return self._server is not None and self._server.is_serving()
+
+    @property
+    def client_count(self) -> int:
+        """Number of connected client writers (leak check)."""
+        return len(self._clients)
+
     def set_packet_loss(self, fraction: float) -> None:
         self.packet_loss = max(0.0, min(1.0, fraction))
 
@@ -155,6 +184,12 @@ class MockEsp32:
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Minimal WebSocket server handshake + frame loop."""
+        # Track this handler task so ``stop`` can cancel it; otherwise a
+        # half-open client would be destroyed pending when the loop closes.
+        task = asyncio.current_task()
+        if task is not None:
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
         self._clients.add(writer)
         try:
             await self._websocket_handshake(reader, writer)
@@ -228,6 +263,8 @@ class MockEsp32:
     async def _handle_payload(self, payload: bytes, writer: asyncio.StreamWriter) -> None:
         if not payload:
             return
+        if self.silent:
+            return
         try:
             packet = decode_packet(
                 payload, key=self.secret, require_signature=self.secret is not None,
@@ -253,19 +290,42 @@ class MockEsp32:
             self._apply_command(packet.data)
             await self._send(writer, self._status_packet())
         elif packet.message_type is MessageType.HEARTBEAT or packet.message_type is MessageType.CONFIG:
-            await self._send(writer, self._status_packet())
+            echo = packet.data.get("echo")
+            await self._send(writer, self._status_packet(echo=echo if isinstance(echo, int) else None))
         elif packet.message_type is MessageType.GOODBYE:
             return
 
     async def _send(self, writer: asyncio.StreamWriter, packet: Packet) -> None:
         if self.packet_loss and self._rng.random() < self.packet_loss:
             return
+        if not self._first_status_sent and self.delay_first_status_s:
+            self._first_status_sent = True
+            await asyncio.sleep(self.delay_first_status_s)
+        self._first_status_sent = True
         if self.latency_ms:
             await asyncio.sleep(self.latency_ms / 1000.0)
-        frame = _encode_ws_frame(encode_packet(packet, self.secret))
-        writer.write(frame)
+
+        self._sent_packets += 1
+        if self.malformed_every and self._sent_packets % self.malformed_every == 0:
+            writer.write(_encode_ws_frame(b"{this is not valid json"))
+            with contextlib.suppress(Exception):
+                await writer.drain()
+            return
+
+        raw = encode_packet(packet, self.secret)
+        if self.bad_version:
+            raw = _rewrite_protocol_version(raw)
+        writer.write(_encode_ws_frame(raw))
         with contextlib.suppress(Exception):
             await writer.drain()
+
+        if self.drop_after_packets and self._sent_packets >= self.drop_after_packets:
+            # One-shot: never re-trigger after a restart so recovery can be
+            # observed without the harness racing the fault.
+            self.drop_after_packets = 0
+            await asyncio.sleep(0)
+            with contextlib.suppress(Exception):
+                writer.close()
 
     async def _send_error(self, writer: asyncio.StreamWriter, message: str) -> None:
         packet = Packet(
@@ -275,6 +335,8 @@ class MockEsp32:
         await self._send(writer, packet)
 
     async def _broadcast(self, packet: Packet) -> None:
+        if self.silent:
+            return
         for writer in list(self._clients):
             with contextlib.suppress(Exception):
                 await self._send(writer, packet)
@@ -328,7 +390,7 @@ class MockEsp32:
 
     # -- packet builders ---------------------------------------------------
 
-    def _status_packet(self) -> Packet:
+    def _status_packet(self, *, echo: int | None = None) -> Packet:
         voltage = 12.0 * (self._pwm / 100.0)
         current = 0.08 + (self._pwm / 100.0) ** 1.6 * 0.62
         data = {
@@ -346,11 +408,29 @@ class MockEsp32:
             "wifiRssi": round(-45 + self._rng.gauss(0, 3), 1),
             "nickname": self.nickname,
         }
+        if echo is not None:
+            data["echo"] = echo
         return Packet(MessageType.STATUS, self.device_id, time.time(), self._next_seq(), data=data)
 
     def _next_seq(self) -> int:
         self._sequence += 1
         return self._sequence
+
+
+def _rewrite_protocol_version(raw: bytes, version: int = 999) -> bytes:
+    """Return a packet whose declared protocol version is incompatible.
+
+    Used by the fault-injection harness to prove the client degrades gracefully
+    on a version mismatch instead of silently accepting the peer.
+    """
+    import json
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return raw
+    payload["v"] = version
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
 def _encode_ws_frame(payload: bytes, opcode: int = 0x1) -> bytes:

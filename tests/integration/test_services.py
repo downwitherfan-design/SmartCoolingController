@@ -207,3 +207,37 @@ def test_snapshot_history_is_bounded_and_ordered(services) -> None:
     assert history
     sequences = [s.sequence for s in history]
     assert sequences == sorted(sequences)
+
+
+def test_shutdown_survives_a_failing_subsystem(tmp_path) -> None:
+    """One broken stop() must not skip the rest of teardown.
+
+    Regression guard: ``shutdown`` used to run every step inside one ``try``,
+    so an exception from (say) the telemetry thread left the persistence writer
+    and the database connection open — a leaked thread and an unflushed file.
+    """
+    from app.services import ApplicationServices
+
+    services = ApplicationServices(base_dir=tmp_path)
+    services.start(simulate=True)
+    closed: list[str] = []
+
+    original = services.telemetry.stop
+
+    def explode() -> None:
+        raise RuntimeError("telemetry thread is wedged")
+
+    services.telemetry.stop = explode  # type: ignore[method-assign]
+    original_close = services.persistence.close
+
+    def track_close() -> None:
+        closed.append("persistence")
+        original_close()
+
+    services.persistence.close = track_close  # type: ignore[method-assign]
+    services.shutdown()
+    assert services.started is False
+    assert closed == ["persistence"], "persistence must still be closed"
+
+    services.telemetry.stop = original  # type: ignore[method-assign]
+    services.persistence.close = original_close  # type: ignore[method-assign]

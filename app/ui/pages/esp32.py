@@ -12,7 +12,7 @@ safety" rule is stated in the panel (spec §100).
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -42,7 +42,12 @@ class Esp32Page(Page):
     subtitle_key = "esp32.subtitle"
     icon_name = "esp32"
 
+    #: Emitted from the discovery worker thread with the devices it found.
+    _discovered = Signal(object)
+
     def _build_content(self, content: QWidget) -> None:
+        self._discovering = False
+        self._discovered.connect(self._on_discovered)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(SPACE["xl"], SPACE["lg"], SPACE["xl"], SPACE["xl"])
         layout.setSpacing(SPACE["lg"])
@@ -86,6 +91,16 @@ class Esp32Page(Page):
         self.disconnect_button.clicked.connect(self._disconnect)
         buttons.addWidget(self.disconnect_button)
         link.addLayout(buttons)
+
+        discover_row = QHBoxLayout()
+        self.discover_button = QPushButton(self.tr_.t("esp32.discover"))
+        self.discover_button.clicked.connect(self._discover)
+        discover_row.addWidget(self.discover_button)
+        self.retry_button = QPushButton(self.tr_.t("esp32.retry"))
+        self.retry_button.clicked.connect(self._retry)
+        discover_row.addWidget(self.retry_button)
+        link.addLayout(discover_row)
+
         link.addWidget(Divider())
         safety = QLabel(self.tr_.t("about.safety_text"))
         safety.setProperty("role", "caption")
@@ -138,26 +153,83 @@ class Esp32Page(Page):
             self.fan_rows[key] = row_widget
             fan_layout.addWidget(row_widget)
         layout.addWidget(fan_card)
+
+        diag_card = Card()
+        diag_layout = QVBoxLayout(diag_card)
+        diag_layout.setContentsMargins(SPACE["lg"], SPACE["lg"], SPACE["lg"], SPACE["lg"])
+        diag_layout.setSpacing(SPACE["sm"])
+        diag_layout.addWidget(
+            SectionHeader(self.tr_.t("esp32.connection_center"), self.tr_.t("esp32.diag_subtitle"))
+        )
+        self.diag_rows: dict[str, KeyValueRow] = {}
+        for key in (
+            "state", "transport", "endpoint", "connect", "handshake",
+            "first_telemetry", "freshness", "reconnects", "failures", "last_error",
+        ):
+            row_widget = KeyValueRow(self.tr_.t(f"esp32.diag.{key}"), "—", mono=True)
+            self.diag_rows[key] = row_widget
+            diag_layout.addWidget(row_widget)
+        layout.addWidget(diag_card)
         layout.addStretch(1)
 
     # -- actions -----------------------------------------------------------
 
-    def _connect_manual(self) -> None:
-        from app.models.devices import Esp32Device
+    def _retry(self) -> None:
+        """Reconnect to the configured/last endpoint without rediscovering."""
+        device = self.services.last_known_device()
+        if device is None:
+            host = self.host_input.text().strip()
+            port = int(self.port_input.value())
+            ok, reason = self.services.connect_manual(host, port)
+            if not ok:
+                self.message.emit(f"{self.tr_.t('esp32.retry')}: {reason}", "warning")
+                return
+        else:
+            self.services.connect_device(device)
+        self.message.emit(self.tr_.t("esp32.retry"), "info")
 
+    def _connect_manual(self) -> None:
         host = self.host_input.text().strip()
-        if not host:
-            self.message.emit(self.tr_.t("esp32.manual_ip"), "warning")
+        port = int(self.port_input.value())
+        ok, reason = self.services.connect_manual(host, port)
+        if not ok:
+            self.message.emit(f"{self.tr_.t('esp32.manual_ip')}: {reason}", "warning")
             return
-        device = Esp32Device(
-            device_id="manual",
-            nickname=host,
-            host=host,
-            port=int(self.port_input.value()),
-        )
-        self.services.config_store.update(esp32={"manual_host": host, "port": int(self.port_input.value())})
+        self.message.emit(f"{self.tr_.t('common.connect')} {host}:{port}", "info")
+
+    def _discover(self) -> None:
+        """Run a bounded discovery scan on a worker thread (never blocks the UI)."""
+        if self._discovering:
+            return
+        self._discovering = True
+        self.discover_button.setEnabled(False)
+        self.discover_button.setText(self.tr_.t("esp32.discovering"))
+
+        import threading
+
+        def _worker() -> None:
+            try:
+                found = self.services.discover_devices()
+            except Exception as exc:  # noqa: BLE001 - discovery must never crash the UI
+                found = []
+                self.message.emit(f"{self.tr_.t('esp32.discover')}: {exc}", "warning")
+            self._discovered.emit(found)
+
+        threading.Thread(target=_worker, name="Esp32Discovery", daemon=True).start()
+
+    def _on_discovered(self, found: object) -> None:
+        self._discovering = False
+        self.discover_button.setEnabled(True)
+        self.discover_button.setText(self.tr_.t("esp32.discover"))
+        devices = list(found) if isinstance(found, list) else []
+        if not devices:
+            self.message.emit(self.tr_.t("esp32.discover_none"), "warning")
+            return
+        device = devices[0]
+        self.host_input.setText(str(device.host))
+        self.port_input.setValue(int(device.port))
         self.services.connect_device(device)
-        self.message.emit(f"{self.tr_.t('common.connect')} {host}", "info")
+        self.message.emit(f"{self.tr_.t('esp32.discover')}: {device.address}", "success")
 
     def _enable_mock(self) -> None:
         device = self.services.enable_mock_device(host="127.0.0.1", port=int(self.port_input.value()))
@@ -192,6 +264,7 @@ class Esp32Page(Page):
         }
         for key, value in rows.items():
             self.protocol_rows[key].set_value(str(value))
+        self._refresh_diagnostics(connection)
 
         fan = snapshot.fan
         fan_rows = {
@@ -207,12 +280,39 @@ class Esp32Page(Page):
             self.fan_rows[key].set_value(value)
         self.mock_badge.setVisible(bool(status.is_mock))
 
+    def _refresh_diagnostics(self, connection) -> None:
+        """Fill the Connection Center rows from the manager's diagnostics."""
+        diag = connection.diagnostics
+        num = self.tr_.number
+
+        def ms(value: float | None) -> str:
+            return f"{num(value, decimals=0)} ms" if value is not None else "—"
+
+        age = diag.telemetry_age_s()
+        state = connection.state
+        rows = {
+            "state": self.tr_.t(f"conn.{state.value}"),
+            "transport": diag.transport or ("websocket" if self.services.config.esp32.use_websocket else "tcp"),
+            "endpoint": diag.endpoint or "—",
+            "connect": ms(diag.connect_ms),
+            "handshake": ms(diag.handshake_ms),
+            "first_telemetry": ms(diag.time_to_first_telemetry_ms),
+            "freshness": f"{num(age, decimals=1)} s" if age is not None else "—",
+            "reconnects": num(diag.reconnect_count),
+            "failures": num(diag.consecutive_failures),
+            "last_error": diag.last_error or "—",
+        }
+        for key, value in rows.items():
+            self.diag_rows[key].set_value(str(value))
+
     def retranslate(self) -> None:
         if not self._built:
             return
         self.connect_button.setText(self.tr_.t("common.connect"))
         self.mock_button.setText(self.tr_.t("esp32.use_mock"))
         self.disconnect_button.setText(self.tr_.t("common.disconnect"))
+        self.discover_button.setText(self.tr_.t("esp32.discover"))
+        self.retry_button.setText(self.tr_.t("esp32.retry"))
 
 
 __all__ = ["Esp32Page"]
