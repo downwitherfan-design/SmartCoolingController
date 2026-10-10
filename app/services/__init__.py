@@ -375,6 +375,14 @@ class ApplicationServices:
             payload["cpuUsagePercent"] = snapshot.cpu.usage
         if snapshot.pad.temperature is not None:
             payload["padTempC"] = snapshot.pad.temperature
+        # In automatic mode the firmware holds the fan authority (spec §47), so
+        # the desktop *recommends* a duty and the controller applies it while it
+        # stays in AUTO.  Without this the whole automatic loop is inert: the
+        # controller computes a target that never reaches the device, and even
+        # SAFE mode and the critical-temperature override command nothing.
+        recommended = self.cooling.recommended_pwm()
+        if recommended is not None:
+            payload["recommendedPwm"] = round(recommended, 1)
         return payload
 
     # -- health probes -----------------------------------------------------

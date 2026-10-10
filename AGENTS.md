@@ -237,6 +237,16 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
   never by `profile.max_pwm`. `_clamp_and_emit(safety_override=True)` enforces
   this; `tests/unit/test_cooling_controller.py` guards it. A profile must never
   be able to cap an emergency.
+- **The controller's output must actually reach the fan.** There are two
+  channels: a `setPwm` *command* overrides firmware authority, while the
+  `recommendedPwm` value in the *telemetry* packet is followed only while the
+  firmware stays in AUTO. So: ordinary AUTO advertises `recommended_pwm()` in
+  the telemetry payload (wired in `ApplicationServices._telemetry_supplier`);
+  SAFE, manual and the critical-temperature override take authority with
+  `_force_manual()` (`setPwm`), and after the emergency clears
+  `_restore_firmware_auto()` returns authority once with `setMode AUTO`. Both
+  directions have focused tests — do not reintroduce a mode-guarded `_apply`
+  that silences the override (it shipped once and no fan ever moved).
 - **Every released artefact is in `checksums.sha256`.** `deliver.py` appends the
   installer digest and the Windows workflow fails the release if it is missing,
   because `RELEASE_NOTES.md` tells the user to verify against that file.

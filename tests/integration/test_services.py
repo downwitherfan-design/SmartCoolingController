@@ -129,6 +129,77 @@ def test_manual_mode_command_reaches_the_controller(services) -> None:
     assert decision.target_pwm == pytest.approx(42.0)
 
 
+def _wait_for(predicate, timeout: float = 8.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_auto_mode_advertises_its_recommendation_in_the_telemetry_packet(services) -> None:
+    """The automatic duty must travel to the firmware as ``recommendedPwm``.
+
+    Regression: the telemetry supplier never included the recommendation, so the
+    controller computed a target that never reached the device and automatic
+    cooling did nothing.
+    """
+    services.cooling.set_profile(services.profiles.active)
+    services.cooling.set_mode(ControllerMode.AUTO)
+    snapshot = services.telemetry.sample_once()
+    decision = services.cooling.update(snapshot)
+
+    payload = services._telemetry_supplier()
+    assert payload.get("recommendedPwm") == pytest.approx(round(decision.target_pwm, 1))
+
+    # Outside AUTO the firmware owns a recommendation no longer.
+    services.cooling.set_mode(ControllerMode.SAFE)
+    assert "recommendedPwm" not in services._telemetry_supplier()
+
+
+def test_automatic_and_safe_modes_actually_move_the_mock_fan(services) -> None:
+    """End-to-end: the real controller drives the real mock over the real link."""
+    import threading
+
+    device = services.enable_mock_device(host="127.0.0.1", port=8896)
+    services.connect_device(device)
+    assert _wait_for(lambda: services.connection.state is ConnectionState.CONNECTED)
+
+    mock = services.connection._mock
+    assert mock is not None
+    services.cooling.set_profile(services.profiles.active)
+    services.cooling.set_mode(ControllerMode.AUTO)
+
+    # The controller samples on its own cadence in the real app; drive it here
+    # while the connection's telemetry loop pushes recommendations to the mock.
+    stop = threading.Event()
+
+    def drive() -> None:
+        while not stop.is_set():
+            services.telemetry.sample_once()
+            time.sleep(0.02)
+
+    worker = threading.Thread(target=drive, daemon=True)
+    worker.start()
+    try:
+        # Auto: the firmware follows the recommendation pushed with telemetry.
+        moved = _wait_for(lambda: mock._target_pwm > 0.0, timeout=6.0)
+        assert moved, "automatic mode never reached the mock fan"
+        auto_target = mock._target_pwm
+        assert auto_target == pytest.approx(services.cooling.target_pwm, abs=2.0)
+
+        # Safe: the desktop overrides firmware authority and forces the maximum.
+        services.cooling.set_mode(ControllerMode.SAFE)
+        assert _wait_for(lambda: mock._target_pwm >= 99.0, timeout=6.0), (
+            "safe mode did not force the mock fan to full speed"
+        )
+    finally:
+        stop.set()
+        worker.join(timeout=2.0)
+        services.connection.disconnect()
+
+
 def test_profiles_seed_builtins(services) -> None:
     profiles = services.profiles.all()
     keys = {p.key for p in profiles}
