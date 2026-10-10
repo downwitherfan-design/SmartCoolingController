@@ -17,6 +17,7 @@ Two rules shape this file:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from app import APP_NAME, APP_VERSION
@@ -295,22 +296,37 @@ class ApplicationServices:
             self.connection.connect_device(device)
 
     def shutdown(self) -> None:
-        """Stop everything in the correct order and flush data to disk."""
+        """Stop everything in the correct order and flush data to disk.
+
+        Each step is isolated: a failure in one must not skip the rest, or a
+        misbehaving subsystem could leave the writer thread or the network
+        thread alive (a leaked thread is worse than a logged error).
+        """
         if not self._started:
             return
         self._started = False
-        try:
-            if self.sessions.recording:
-                self.sessions.stop()
-            self.telemetry.stop()
-            self.connection.stop()
-            self._save_window_state()
-            if self.persistence is not None:
-                self.persistence.stop_writer()
-                self.persistence.close()
-        except Exception:  # noqa: BLE001 - shutdown must always complete
-            _log.exception("error during shutdown")
+        steps: tuple[tuple[str, Callable[[], None]], ...] = (
+            ("sessions", self._stop_sessions),
+            ("telemetry", self.telemetry.stop),
+            ("connection", self.connection.stop),
+            ("window-state", self._save_window_state),
+            ("persistence", self._close_persistence),
+        )
+        for name, step in steps:
+            try:
+                step()
+            except Exception:  # noqa: BLE001 - shutdown must always complete
+                _log.exception("error during shutdown: %s", name)
         _log.info("application services stopped")
+
+    def _stop_sessions(self) -> None:
+        if self.sessions.recording:
+            self.sessions.stop()
+
+    def _close_persistence(self) -> None:
+        if self.persistence is not None:
+            self.persistence.stop_writer()
+            self.persistence.close()
 
     # -- runtime hooks -----------------------------------------------------
 

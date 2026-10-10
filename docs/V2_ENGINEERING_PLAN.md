@@ -63,26 +63,33 @@ non-obvious choice.
 
 ## Phase 1 — ESP32 connection reliability
 
-- [IN PROGRESS] 1A Connection lifecycle state machine
+- [PASS] 1A Connection lifecycle state machine
   - Authoritative `_set_state` with a session **generation guard**; states
     DISCONNECTED/DISCOVERING/CONNECTING/CONNECTED/DEGRADED/STALE/RECONNECTING/STOPPING.
   - Idempotent `disconnect`/`stop`; cancellable connect; STOPPING is terminal.
-- [TODO] 1B Discovery: cached endpoint first, manual validation, bounded timeouts.
-- [TODO] 1C Transports: heartbeat timeout, serialized writes, bounded reads.
-- [TODO] 1D Protocol: graceful unknown type/version, correlation ids.
-- [TODO] 1E Diagnostics: monotonic timestamps + structured diagnostics service.
+- [PASS] 1B Discovery: cached endpoint first, manual validation, bounded timeouts.
+- [PASS] 1C Transports: heartbeat timeout, serialized writes, bounded reads.
+  - Send lock on both transports (websockets forbids concurrent sends);
+    `close()` swaps the handle then closes under the lock.
+- [PASS] 1D Protocol: graceful unknown type/version, correlation ids.
+  - A protocol-version mismatch or auth failure aborts the session, settles in
+    PROTOCOL_MISMATCH/UNAUTHORIZED and stops retrying instead of spinning.
+- [PASS] 1E Diagnostics: monotonic timestamps + structured diagnostics service.
+  - Counters for discovery/connect/handshake/time-to-first-telemetry,
+    consecutive failures, malformed packets, heartbeat timeouts, RTT.
 
 ## Phase 2 — Connection chart & animation
 
-- [TODO] Timers stopped/restarted correctly on teardown and page rebuild.
-- [TODO] Animation reflects real state (CONNECTED moves; DEGRADED slower; STALE
+- [PASS] Timers stopped/restarted correctly on teardown and page rebuild.
+- [PASS] Animation reflects real state (CONNECTED moves; DEGRADED slower; STALE
   dimmed/frozen; DISCONNECTED idle); no packets implied when there are none.
+- [PASS] Wi-Fi node reports real status/RSSI/latency/loss; no fabricated "online".
 
 ## Phase 3 — Automated network/hardware test harness
 
-- [TODO] Deterministic fake ESP32 with fault injection (slow, drop, malformed,
+- [PASS] Deterministic fake ESP32 with fault injection (slow, drop, malformed,
   bad version, stale, restart, disconnect-while-connecting).
-- [TODO] Leak/stress: repeated connect/disconnect cycles, no leaked tasks,
+- [PASS] Leak/stress: repeated connect/disconnect cycles, no leaked tasks,
   no duplicate callbacks, bounded buffers.
 
 ## Phase 4 — V2 features

@@ -74,22 +74,16 @@ def test_stop_animation_halts_the_timer(schematic: Schematic) -> None:
     assert not schematic._timer.isActive()
 
 
-def test_diagram_teardown_stops_schematic_timer(qapp, tmp_path) -> None:
-    from app.services import ApplicationServices
-
-    services = ApplicationServices(base_dir=tmp_path)
-    try:
-        theme = build_theme(services.config.localization.language)
-        page = DiagramPage(
-            services, theme, Translator("en"), AnimationManager(theme)
-        )
-        page.build()
-        page.refresh(services.telemetry.sample_once())
-        page.schematic.set_link_state(
-            ConnectionState.CONNECTED, fan_state=FanState.RUNNING, rpm=1800
-        )
-        assert page.schematic._timer.isActive()
-        page.teardown()
-        assert not page.schematic._timer.isActive()
-    finally:
-        services.shutdown()
+def test_diagram_teardown_stops_schematic_timer(qapp, services) -> None:
+    theme = build_theme("en")
+    page = DiagramPage(
+        services, theme, Translator("en"), AnimationManager(theme)
+    )
+    page.build()
+    page.refresh(services.telemetry.sample_once())
+    page.schematic.set_link_state(
+        ConnectionState.CONNECTED, fan_state=FanState.RUNNING, rpm=1800
+    )
+    assert page.schematic._timer.isActive()
+    page.teardown()
+    assert not page.schematic._timer.isActive()
