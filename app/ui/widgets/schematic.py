@@ -84,6 +84,17 @@ _LINK_SPECS: list[tuple[str, str, str, str, bool]] = [
     ("ds18b20", "esp32", "temp", "warm", True),
 ]
 
+#: How a connection state is drawn.  ``healthy``/``degraded`` move particles
+#: (degraded at a reduced speed); ``stale`` and ``idle`` are static.
+_LINK_MODE_BY_STATE: dict[ConnectionState, str] = {
+    ConnectionState.CONNECTED: "healthy",
+    ConnectionState.DEGRADED: "degraded",
+    ConnectionState.STALE: "stale",
+}
+
+#: Alpha of an idle/degraded link stroke, so a non-live edge reads as inactive.
+_LINK_ALPHA = {"healthy": 0.75, "degraded": 0.45, "stale": 0.30, "idle": 0.22}
+
 
 class Schematic(ThemedWidget):
     """The interactive, animated system diagram."""
@@ -96,7 +107,8 @@ class Schematic(ThemedWidget):
         self._links = [_Link(*spec) for spec in _LINK_SPECS]
         self._hover_key: str | None = None
         self._active_key: str | None = None
-        self._connected = False
+        self._mode = "idle"
+        self._state = ConnectionState.DISCONNECTED
         self._fan_running = False
         self._fan_rpm: float | None = None
         self._last_tick = time.monotonic()
@@ -113,17 +125,22 @@ class Schematic(ThemedWidget):
     # -- state -------------------------------------------------------------
 
     def set_link_state(self, state: ConnectionState, *, fan_state: FanState, rpm: float | None) -> None:
-        self._connected = state is ConnectionState.CONNECTED
+        # Map the link's real health onto the animation: a link that is merely
+        # up (DEGRADED) moves slowly, a link that stopped delivering (STALE)
+        # freezes and dims, and only a live link moves at full speed.
+        self._mode = _LINK_MODE_BY_STATE.get(state, "idle")
+        self._state = state
         self._fan_running = fan_state in (FanState.RUNNING, FanState.BOOSTING, FanState.STARTING)
         self._fan_rpm = rpm
+        moving = self._mode in ("healthy", "degraded")
         for link in self._links:
             if link.src in ("wifi", "esp32", "telemetry", "tach", "ina219", "ds18b20"):
-                link.live = self._connected
+                link.live = moving
         self._update_animation()
         self.update()
 
     def _update_animation(self) -> None:
-        should_run = self.theme.motion and self._connected
+        should_run = self.theme.motion and self._mode in ("healthy", "degraded")
         if should_run and not self._timer.isActive():
             self._last_tick = time.monotonic()
             self._timer.start()
@@ -141,6 +158,8 @@ class Schematic(ThemedWidget):
         speed = 0.5
         if self._fan_rpm:
             speed = max(0.35, min(1.6, self._fan_rpm / 2200.0))
+        if self._mode == "degraded":
+            speed *= 0.35
         for link in self._links:
             if link.live:
                 link.phase = (link.phase + dt * speed) % 1.0
@@ -214,7 +233,8 @@ class Schematic(ThemedWidget):
 
         tone = self.theme.color(link.tone)
         color = QColor(tone)
-        color.setAlphaF(0.75 if link.live else 0.22)
+        alpha = _LINK_ALPHA["healthy" if link.live else self._mode]
+        color.setAlphaF(alpha)
         pen = QPen(color, 2.0)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
@@ -328,14 +348,12 @@ class Schematic(ThemedWidget):
             )
 
     def _node_subtitle(self, key: str) -> str:
-        if key == "esp32":
-            return self.tr_.t("conn.connected") if self._connected else self.tr_.t("conn.disconnected")
+        if key in ("esp32", "wifi"):
+            return self.tr_.t(f"conn.{self._state.value}")
         if key == "fan":
             if self._fan_rpm is None:
                 return self.tr_.t("dash.rpm_unavailable")
             return f"{self.tr_.number(self._fan_rpm, grouping=True)} RPM"
-        if key == "wifi":
-            return self.tr_.t("conn.connected") if self._connected else self.tr_.t("conn.disconnected")
         return ""
 
     def apply_theme(self) -> None:
@@ -364,7 +382,7 @@ def _quad_point(start: QPointF, control: QPointF, end: QPointF, t: float) -> QPo
 #: Human-readable node details used by the page's side panel (spec §32).
 NODE_DETAIL_GROUPS = {
     "laptop": ("CPU", "GPU", "RAM", "Storage", "Telemetry"),
-    "wifi": ("status", "latency", "packets"),
+    "wifi": ("status", "rssi", "latency", "packets"),
     "esp32": ("device_id", "ip", "firmware", "protocol", "uptime", "state"),
     "pwm": ("duty", "frequency"),
     "fan": ("PWM", "RPM", "current", "voltage", "power"),
