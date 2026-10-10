@@ -334,3 +334,43 @@ def test_windows_installer_workflow_verifies_the_frozen_binary() -> None:
     text = _WORKFLOW.read_text(encoding="utf-8")
     assert "--headless" in text
     assert "--version" in text
+
+
+# ---------------------------------------------------------------------------
+# verify_frozen.py decodes the child process output itself.
+#
+# The frozen app prints a "·" separator in --version.  On Windows a piped
+# stdout used the ANSI code page, so decoding as UTF-8 raised a
+# UnicodeDecodeError inside subprocess and left stdout as None, which then
+# surfaced as "argument of type 'NoneType' is not iterable" — the first
+# Windows CI run died there.  The runner must pin UTF-8 and decode leniently.
+# ---------------------------------------------------------------------------
+
+
+def _import_verify_frozen():
+    sys.path.insert(0, str(ROOT / "scripts" / "build"))
+    import verify_frozen
+
+    return verify_frozen
+
+
+def test_verify_frozen_pins_utf8_for_the_child() -> None:
+    verify_frozen = _import_verify_frozen()
+    assert verify_frozen._base_env()["PYTHONIOENCODING"] == "utf-8"
+
+
+def test_verify_frozen_survives_non_utf8_child_output(tmp_path: Path) -> None:
+    verify_frozen = _import_verify_frozen()
+    script = tmp_path / "emit.py"
+    # Write raw bytes that are *not* valid UTF-8 (0xe9 = 'é' in cp1252), as a
+    # child ignoring PYTHONIOENCODING would on Windows.
+    script.write_text(
+        "import sys; sys.stdout.buffer.write(b'SmartCooling \\xb7 \\xe9')",
+        encoding="utf-8",
+    )
+    result = verify_frozen._run(
+        [sys.executable, str(script)], env=verify_frozen._base_env(), timeout=30
+    )
+    assert result.returncode == 0
+    assert result.stdout is not None  # no UnicodeDecodeError -> None
+    assert "SmartCooling" in result.stdout

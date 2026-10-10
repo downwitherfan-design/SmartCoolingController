@@ -29,6 +29,9 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       # One place for the pinned toolchain; matches requirements-build.txt.
       PYTHONUTF8: "1"
+      # The app prints non-ASCII ("·" in --version); keep piped output UTF-8 so
+      # no step trips over the Windows ANSI code page.
+      PYTHONIOENCODING: utf-8
 
     steps:
       - name: Check out the source

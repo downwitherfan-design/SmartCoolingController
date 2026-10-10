@@ -41,14 +41,27 @@ def _base_env() -> dict[str, str]:
     env.pop("PYTHONPATH", None)  # prove the bundle is self-contained
     env.pop("PYTHONHOME", None)
     env["QT_QPA_PLATFORM"] = "offscreen"
+    # The frozen app prints non-ASCII (the "·" separator in --version).  On
+    # Windows a piped stdout otherwise defaults to the ANSI code page, so the
+    # parent's UTF-8 decode raises and stdout becomes None.  Pin both ends.
+    env["PYTHONIOENCODING"] = "utf-8"
     return env
 
 
 def _run(
     command: list[str], *, env: dict[str, str], timeout: float
 ) -> subprocess.CompletedProcess:
+    # Decode explicitly as UTF-8 with replacement: a stray byte from a child
+    # that ignores PYTHONIOENCODING must never turn into a UnicodeDecodeError
+    # (which surfaces as an unhelpful "NoneType is not iterable" further down).
     return subprocess.run(
-        command, capture_output=True, text=True, env=env, timeout=timeout, check=False
+        command,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        timeout=timeout,
+        check=False,
     )
 
 
