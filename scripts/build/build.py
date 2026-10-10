@@ -1,0 +1,258 @@
+#!/usr/bin/env python3
+"""Build the SmartCooling Controller Windows desktop bundle (spec §260, §262).
+
+The script is a thin, explicit pipeline rather than a wrapper around a build
+system, because a desktop installer has to be reproducible and debuggable:
+
+1. preflight — interpreter version and every runtime import;
+2. quality gate — ruff (and mypy when available);
+3. tests — the full pytest suite, unless ``--skip-tests``;
+4. stamp — write ``app/_build.py`` with the commit/time identifier;
+5. freeze — run PyInstaller against ``installer/smartcooling.spec``;
+6. verify — launch the frozen binary head-less and check it exits cleanly;
+7. manifest — record versions, sizes and hashes for the release notes.
+
+Usage::
+
+    python scripts/build/build.py                 # local build (stamps dirty id)
+    python scripts/build/build.py --release       # tagged release (commit sha)
+    python scripts/build/build.py --skip-tests    # fast iteration
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import shutil
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from common import (  # path bootstrap must precede this import
+    ROOT,
+    build_info,
+    clean,
+    python,
+    run,
+    stamp_build,
+    write_json,
+)
+
+#: Import paths that must resolve for a frozen build to work at runtime.
+RUNTIME_IMPORTS = (
+    "PySide6.QtWidgets",
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtNetwork",
+    "pyqtgraph",
+    "psutil",
+    "websockets",
+    "pydantic",
+    "cryptography",
+    "sqlite3",
+)
+
+DIST = ROOT / "build" / "dist"
+WORK = ROOT / "build" / "work"
+
+
+def _preflight() -> None:
+    print("[1/7] preflight", flush=True)
+    major, minor = sys.version_info[:2]
+    if (major, minor) < (3, 11):
+        raise SystemExit(f"Python 3.11+ is required, found {major}.{minor}")
+    missing: list[str] = []
+    for module in RUNTIME_IMPORTS:
+        try:
+            __import__(module)
+        except Exception as exc:  # noqa: BLE001 - report every missing dependency
+            missing.append(f"{module}: {exc}")
+    if missing:
+        raise SystemExit("missing runtime dependencies:\n  " + "\n  ".join(missing))
+    print(f"      python {major}.{minor} · all {len(RUNTIME_IMPORTS)} runtime imports OK")
+
+
+def _quality_gate(skip: bool) -> None:
+    print("[2/7] quality gate", flush=True)
+    if skip:
+        print("      skipped")
+        return
+    if shutil.which("ruff") or _module_available("ruff"):
+        run([python(), "-m", "ruff", "check", "app", "run.py", "tests", "scripts"])
+    else:
+        print("      ruff not installed — skipped")
+    if _module_available("mypy"):
+        run([python(), "-m", "mypy", "app"], check=False)
+    else:
+        print("      mypy not installed — skipped")
+
+
+def _tests(skip: bool) -> None:
+    print("[3/7] tests", flush=True)
+    if skip:
+        print("      skipped")
+        return
+    run([python(), "-m", "pytest", "-q"])
+
+
+def _module_available(name: str) -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec(name) is not None
+
+
+def _stamp(release: bool) -> Path:
+    print("[4/7] stamp build identifier", flush=True)
+    info = build_info(release=release)
+    path = stamp_build(info)
+    print(f"      BUILD_ID = {info.build_id}")
+    return path
+
+
+def _freeze(release: bool) -> Path:
+    print("[5/7] freeze with PyInstaller", flush=True)
+    if not _module_available("PyInstaller"):
+        raise SystemExit("PyInstaller is not installed (pip install -r requirements-build.txt)")
+    clean(DIST)
+    clean(WORK)
+    info = build_info(release=release)
+    _write_version_info(info.version, info.build_id)
+    spec = ROOT / "installer" / "smartcooling.spec"
+    env = dict(os.environ)
+    env["SMARTCOOLING_BUILD_ID"] = info.build_id
+    env["SMARTCOOLING_APP_VERSION"] = info.version
+    run(
+        [
+            python(),
+            "-m",
+            "PyInstaller",
+            str(spec),
+            "--noconfirm",
+            "--clean",
+            "--distpath",
+            str(DIST),
+            "--workpath",
+            str(WORK),
+        ],
+        env=env,
+    )
+    bundle = DIST / "SmartCoolingController"
+    if not bundle.exists():
+        raise SystemExit(f"expected bundle at {bundle}, but it was not produced")
+    print(f"      bundle: {bundle}")
+    return bundle
+
+
+def _write_version_info(version: str, build_id: str) -> Path:
+    """Generate the Windows VERSIONINFO resource embedded in the .exe.
+
+    This is what makes Explorer show a proper publisher, version and product
+    name on the executable and drives "Apps & features" metadata.
+    """
+    parts = []
+    for chunk in (version.split("+")[0]).split("."):
+        parts.append(int(chunk) if chunk.isdigit() else 0)
+    while len(parts) < 4:
+        parts.append(0)
+    quad = ", ".join(str(part) for part in parts[:4])
+    text = f"""# UTF-8 — generated by scripts/build/build.py
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=({quad}),
+    prodvers=({quad}),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0),
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',
+        [StringStruct('CompanyName', 'SmartCooling'),
+         StringStruct('FileDescription', 'SmartCooling Controller'),
+         StringStruct('FileVersion', '{version}'),
+         StringStruct('InternalName', 'SmartCoolingController'),
+         StringStruct('LegalCopyright', 'MIT License'),
+         StringStruct('OriginalFilename', 'SmartCoolingController.exe'),
+         StringStruct('ProductName', 'SmartCooling Controller'),
+         StringStruct('ProductVersion', '{version}'),
+         StringStruct('Comments', 'build {build_id}')]),
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])]),
+  ],
+)
+"""
+    path = ROOT / "installer" / "version_info.txt"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _verify(bundle: Path) -> None:
+    print("[6/7] verify the frozen bundle", flush=True)
+    verifier = ROOT / "scripts" / "build" / "verify_frozen.py"
+    run([python(), str(verifier), str(bundle)])
+
+
+def _manifest(bundle: Path, release: bool) -> Path:
+    print("[7/7] write build manifest", flush=True)
+    info = build_info(release=release)
+    payload = {
+        "version": info.version,
+        "build_id": info.build_id,
+        "protocol_version": info.protocol_version,
+        "git_sha": info.git_sha,
+        "dirty": info.dirty,
+        "timestamp": info.timestamp,
+        "platform": sys.platform,
+        "python": sys.version.split()[0],
+        "bundle": str(bundle.relative_to(ROOT)),
+        "size_bytes": _directory_size(bundle),
+        "files": {
+            "count": sum(1 for _ in bundle.rglob("*") if _.is_file()),
+            "main_exe_sha256": _sha256(bundle / "SmartCoolingController.exe")
+            if (bundle / "SmartCoolingController.exe").exists()
+            else _sha256(bundle / "SmartCoolingController"),
+        },
+    }
+    path = write_json(ROOT / "build" / "manifest.json", payload)
+    print(f"      manifest: {path}")
+    return path
+
+
+def _directory_size(path: Path) -> int:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Build the SmartCooling Controller bundle.")
+    parser.add_argument("--release", action="store_true", help="stamp a tagged release identifier")
+    parser.add_argument("--skip-tests", action="store_true", help="skip the pytest gate")
+    parser.add_argument("--skip-quality", action="store_true", help="skip ruff/mypy")
+    args = parser.parse_args(argv)
+
+    _preflight()
+    _quality_gate(args.skip_quality)
+    _tests(args.skip_tests)
+    _stamp(args.release)
+    bundle = _freeze(args.release)
+    _verify(bundle)
+    _manifest(bundle, args.release)
+    print("\nBuild complete.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -18,9 +18,12 @@ coverage.xml
 htmlcov/
 
 # Build output (PyInstaller work/dist, wheels, manifests)
-build/
-dist/
-dist_wheel/
+# Anchored to the repository root: a bare "build/" or "dist/" also matches the
+# *source* directories scripts/build/ and scripts/diagnostics/, silently keeping
+# the entire build pipeline out of git.  Only the root output dirs are ignored.
+/build/
+/dist/
+/dist_wheel/
 
 # One-click Windows build caches (big wheels; never ship or commit)
 .pip-cache/
