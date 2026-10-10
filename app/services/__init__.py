@@ -234,19 +234,63 @@ class ApplicationServices:
     def connect_device(self, device) -> None:
         self.connection.connect_device(device)
 
-    def _try_auto_connect(self) -> None:
-        device = None
-        if self.config.esp32.last_device_id and self.persistence is not None:
-            device = self.persistence.devices.get(self.config.esp32.last_device_id)
-        if device is None and self.config.esp32.manual_host:
-            from app.models.devices import Esp32Device
+    def connect_manual(self, host: str, port: int) -> tuple[bool, str]:
+        """Validate and connect to a user-entered endpoint.
 
-            device = Esp32Device(
-                device_id="manual",
-                nickname="Manual",
-                host=self.config.esp32.manual_host,
-                port=self.config.esp32.port,
-            )
+        Returns ``(ok, reason)`` so the UI can show *why* an address was
+        rejected instead of failing silently.  A valid address is remembered as
+        the last-known host so the next launch can try it first.
+        """
+        from app.protocol.discovery import manual_device, validate_endpoint
+
+        ok, reason = validate_endpoint(host, port)
+        if not ok:
+            return False, reason
+        device = manual_device(host.strip(), int(port))
+        self.config_store.update(esp32={"manual_host": host.strip(), "port": int(port)})
+        self.connection.connect_device(device)
+        return True, ""
+
+    def last_known_device(self):
+        """Return the cached last-known endpoint, or ``None``.
+
+        Used to attempt a deterministic connection before an expensive
+        discovery scan; discovery only runs when nothing is cached or the cached
+        endpoint fails.
+        """
+        host = self.config.esp32.last_host or self.config.esp32.manual_host
+        if not host:
+            return None
+        from app.models.devices import Esp32Device
+
+        return Esp32Device(
+            device_id=self.config.esp32.last_device_id or "cached",
+            nickname="Last known",
+            host=host,
+            port=self.config.esp32.port,
+        )
+
+    def discover_devices(self, *, timeout_s: float | None = None):
+        """Run a bounded UDP discovery scan and return the devices found.
+
+        Discovery is best-effort and never blocks the caller for longer than the
+        configured budget.  It is separate from connection failure handling: an
+        empty result means "nothing answered", not "the connection failed".
+        """
+        from app.protocol.discovery import UdpDiscovery
+
+        if not self.config.esp32.discovery_enabled:
+            return []
+        budget = self.config.esp32.discovery_timeout_s if timeout_s is None else timeout_s
+        discovery = UdpDiscovery(port=self.config.esp32.discovery_port)
+        return discovery.discover(timeout_s=max(0.1, budget))
+
+    def _try_auto_connect(self) -> None:
+        # Prefer the deterministic last-known endpoint, then a remembered
+        # device, then the manual host — never a broadcast scan on start-up.
+        device = self.last_known_device()
+        if device is None and self.config.esp32.last_device_id and self.persistence is not None:
+            device = self.persistence.devices.get(self.config.esp32.last_device_id)
         if device is not None:
             self.connection.connect_device(device)
 

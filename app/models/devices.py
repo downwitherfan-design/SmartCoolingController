@@ -71,7 +71,12 @@ class Esp32Status:
 
     @property
     def fan_available(self) -> bool:
-        return self.connection in {ConnectionState.CONNECTED, ConnectionState.DEGRADED}
+        # Available only once the controller has actually delivered a packet;
+        # a transport that is up but silent must not publish fan metrics.
+        return (
+            self.connection in {ConnectionState.CONNECTED, ConnectionState.DEGRADED}
+            and self.last_packet_at is not None
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -145,4 +145,49 @@ def manual_device(host: str, port: int = 8765, device_id: str = "") -> Discovere
     )
 
 
-__all__ = ["UdpDiscovery", "DiscoveredDevice", "manual_device", "DEFAULT_DISCOVERY_PORT"]
+def validate_endpoint(host: str, port: int) -> tuple[bool, str]:
+    """Validate a user-entered host and port.
+
+    Returns ``(ok, reason)``.  Accepts an IPv4/IPv6 literal or a DNS hostname
+    that could plausibly resolve on a LAN; rejects empty strings, whitespace,
+    schemes (``ws://``) and out-of-range ports so a typo is caught before a
+    pointless connection attempt.
+    """
+    host = host.strip()
+    if not host:
+        return False, "empty host"
+    if not 1 <= int(port) <= 65535:
+        return False, "port must be between 1 and 65535"
+    if "://" in host or "/" in host:
+        return False, "enter a host or IP address, not a URL"
+    if " " in host:
+        return False, "host must not contain spaces"
+
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(host)
+        return True, ""
+    except ValueError:
+        pass
+
+    # Hostname rules: labels of alphanumerics and hyphens, dot separated.
+    if len(host) > 253:
+        return False, "hostname is too long"
+    for label in host.rstrip(".").split("."):
+        if not label or len(label) > 63:
+            return False, "invalid hostname label"
+        if label[0] == "-" or label[-1] == "-":
+            return False, "hostname label may not start or end with a hyphen"
+        if not all(char.isalnum() or char == "-" for char in label):
+            return False, "hostname contains invalid characters"
+    return True, ""
+
+
+__all__ = [
+    "UdpDiscovery",
+    "DiscoveredDevice",
+    "manual_device",
+    "validate_endpoint",
+    "DEFAULT_DISCOVERY_PORT",
+]

@@ -159,6 +159,7 @@ class ConnectionDiagnostics:
     last_error_category: str = ""
     consecutive_failures: int = 0
     reconnect_count: int = 0
+    sessions_started: int = 0
     malformed_packets: int = 0
     timeouts: int = 0
     heartbeat_timeouts: int = 0
@@ -183,6 +184,7 @@ class ConnectionDiagnostics:
             "last_error_category": self.last_error_category,
             "consecutive_failures": self.consecutive_failures,
             "reconnect_count": self.reconnect_count,
+            "sessions_started": self.sessions_started,
             "malformed_packets": self.malformed_packets,
             "timeouts": self.timeouts,
             "heartbeat_timeouts": self.heartbeat_timeouts,
@@ -563,6 +565,8 @@ class ConnectionManager:
 
     async def _session(self, target: DiscoveredDevice) -> None:
         epoch = self._new_epoch()
+        with self._lock:
+            self._diag.sessions_started += 1
         self._set_state(_CONNECTING, "", epoch=epoch)
         transport = create_transport(self._use_websocket)
         self._diag.transport = "websocket" if self._use_websocket else "tcp"
@@ -594,6 +598,10 @@ class ConnectionManager:
             self._healthy_since = None
             self._session_t0 = time.monotonic()
             self._pending_heartbeats.clear()
+            # Do not let a previous session's freshness make a silent new
+            # session look alive: clear the last-packet clock and latency.
+            self._status.last_packet_at = None
+            self._status.latency_ms = None
 
         handshake_started = time.monotonic()
         try:
