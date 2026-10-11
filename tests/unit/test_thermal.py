@@ -7,8 +7,16 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.analytics.thermal import ThermalAnalyser, ThermalThresholds
-from app.core.enums import FanControlSource, ThermalState, ThermalTrend
+from app.core.enums import (
+    DataProvenance,
+    FanControlSource,
+    MetricKey,
+    MetricState,
+    ThermalState,
+    ThermalTrend,
+)
 from app.models.cooling import CoolingProfile, FanCurve
+from app.models.sensors import NormalisedMetric
 from app.models.telemetry import CpuTelemetry, GpuTelemetry, TelemetrySnapshot
 
 
@@ -179,10 +187,113 @@ def test_critical_temperature_raises_an_anomaly() -> None:
     assert kinds, "a critical CPU temperature should raise at least one anomaly"
 
 
+def _rising_analyser(**kwargs) -> tuple[ThermalAnalyser, list[str]]:
+    analyser = ThermalAnalyser(**kwargs)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    kinds: list[str] = []
+    # +1 °C every 5 s is about +12 °C/min — above a low threshold, below a high
+    # one, and comfortably under the CPU warm limit so no other anomaly fires.
+    for index in range(12):
+        analyser.analyse(
+            _snapshot(cpu=40 + index, at=base + timedelta(seconds=index * 5))
+        )
+    kinds = [a.kind.value for a in analyser.last_anomalies]
+    return analyser, kinds
+
+
+def test_configured_rapid_rise_threshold_is_honoured() -> None:
+    """``alerts.rapid_rise_c_per_min`` must actually drive the detector.
+
+    The analyser used to hardcode the threshold as ``stable_band * 6`` and
+    ignore the setting entirely.  A low threshold must flag the same rise the
+    default threshold lets through.
+    """
+    _, permissive = _rising_analyser(rapid_rise_c_per_min=5.0)
+    assert "rapid_thermal_rise" in permissive
+
+    _, strict = _rising_analyser(rapid_rise_c_per_min=50.0)
+    assert "rapid_thermal_rise" not in strict
+
+
+def test_rapid_rise_threshold_can_be_changed_at_runtime() -> None:
+    analyser = ThermalAnalyser(rapid_rise_c_per_min=50.0)
+    analyser.set_rapid_rise_threshold(5.0)
+    assert analyser._rapid_rise_c_per_min == 5.0
+
+
 def test_analysis_is_always_derived_provenance() -> None:
     analyser = ThermalAnalyser()
     analysis = analyser.analyse(_snapshot(cpu=50))
     assert analysis.provenance.value == "derived"
+
+
+
+def _metric(key: MetricKey, value: float | None) -> NormalisedMetric:
+    state = MetricState.VALID if value is not None else MetricState.UNAVAILABLE
+    return NormalisedMetric(
+        key=key, value=value, unit="", state=state, provenance=DataProvenance.MEASURED
+    )
+
+
+def _sensor_snapshot(*, at: datetime, cpu: float | None) -> TelemetrySnapshot:
+    snap = _snapshot(cpu=cpu, at=at)
+    snap.metrics = {MetricKey.CPU_TEMPERATURE: _metric(MetricKey.CPU_TEMPERATURE, cpu)}
+    return snap
+
+
+def test_vanished_sensor_is_reported_by_the_live_analyser() -> None:
+    """A sensor that stops reporting must raise SENSOR_DISAPPEARED.
+
+    The live detector never emitted this kind; only the standalone reference
+    detector did.  A sensor seen reporting and then gone for the stale window
+    must be flagged, once.
+    """
+    analyser = ThermalAnalyser(sensor_stale_after_s=5.0)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    analyser.analyse(_sensor_snapshot(at=base, cpu=50.0))
+    assert "sensor_disappeared" not in {
+        a.kind.value for a in analyser.last_anomalies
+    }
+
+    # Gone but within the grace window: still nothing.
+    analyser.analyse(_sensor_snapshot(at=base + timedelta(seconds=3), cpu=None))
+    assert "sensor_disappeared" not in {
+        a.kind.value for a in analyser.last_anomalies
+    }
+
+    # Gone past the window: reported exactly once.
+    analyser.analyse(_sensor_snapshot(at=base + timedelta(seconds=6), cpu=None))
+    kinds = [a.kind.value for a in analyser.last_anomalies]
+    assert "sensor_disappeared" in kinds
+
+    analyser.analyse(_sensor_snapshot(at=base + timedelta(seconds=9), cpu=None))
+    assert "sensor_disappeared" not in {
+        a.kind.value for a in analyser.last_anomalies
+    }
+
+
+def test_transient_sensor_drop_does_not_raise_an_anomaly() -> None:
+    """One missing sample must not raise; the sensor returning clears it."""
+    analyser = ThermalAnalyser(sensor_stale_after_s=5.0)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    analyser.analyse(_sensor_snapshot(at=base, cpu=50.0))
+    analyser.analyse(_sensor_snapshot(at=base + timedelta(seconds=1), cpu=None))
+    # Back before the window elapses.
+    analyser.analyse(_sensor_snapshot(at=base + timedelta(seconds=2), cpu=51.0))
+    analyser.analyse(_sensor_snapshot(at=base + timedelta(seconds=30), cpu=52.0))
+    assert "sensor_disappeared" not in {
+        a.kind.value for a in analyser.last_anomalies
+    }
+
+
+def test_sensor_that_was_never_present_is_not_a_dropout() -> None:
+    analyser = ThermalAnalyser(sensor_stale_after_s=0.0)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    # GPU temperature was never available, so its absence is not a transition.
+    analyser.analyse(_snapshot(cpu=50, gpu=None, at=base))
+    assert "sensor_disappeared" not in {
+        a.kind.value for a in analyser.last_anomalies
+    }
 
 
 def test_custom_thresholds_are_honoured() -> None:

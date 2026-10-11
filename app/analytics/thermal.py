@@ -26,12 +26,24 @@ from app.core.enums import (
     AnomalyKind,
     DataProvenance,
     FanControlSource,
+    MetricKey,
     ThermalState,
     ThermalTrend,
 )
 from app.models.alerts import Anomaly
 from app.models.cooling import CoolingProfile
 from app.models.telemetry import TelemetrySnapshot, ThermalAnalysis
+
+#: Metrics whose vanishing from the snapshot indicates a sensor dropout.  Fan
+#: tachometry and supply rails are included because a fan that stops reporting
+#: is as important as a temperature probe that stops reporting.
+_DEFAULT_SENSOR_METRICS: tuple[MetricKey, ...] = (
+    MetricKey.CPU_TEMPERATURE,
+    MetricKey.GPU_TEMPERATURE,
+    MetricKey.FAN_RPM,
+    MetricKey.FAN_VOLTAGE,
+    MetricKey.FAN_CURRENT,
+)
 
 
 @dataclass(slots=True)
@@ -126,12 +138,27 @@ class ThermalAnalyser:
         trend_window_s: float = 60.0,
         rate_window_s: float = 30.0,
         stable_band_c_per_min: float = 0.6,
+        rapid_rise_c_per_min: float | None = None,
+        sensor_metrics: tuple[MetricKey, ...] = _DEFAULT_SENSOR_METRICS,
+        sensor_stale_after_s: float = 5.0,
     ) -> None:
         self.thresholds = thresholds or ThermalThresholds()
         self.hysteresis_c = hysteresis_c
         self._trend_window_s = trend_window_s
         self._rate_window_s = rate_window_s
         self._stable_band = stable_band_c_per_min
+        # When the user has not chosen a rapid-rise threshold we derive a
+        # conservative one from the stable band (6×) so the detector still
+        # works out of the box.
+        self._rapid_rise_c_per_min = rapid_rise_c_per_min
+        # Metrics whose disappearance from the snapshot is worth flagging.  Only
+        # metrics that were seen *available* at least once can "disappear", so a
+        # sensor that was never present never raises an anomaly.
+        self._sensor_metrics = tuple(sensor_metrics)
+        # A sensor must stay gone for this long before it is reported, so a
+        # single dropped sample (a transient backend hiccup) does not raise an
+        # anomaly.  Mirrors the connection manager's stale window.
+        self._sensor_stale_after_s = max(0.0, float(sensor_stale_after_s))
         self._cpu = SlidingWindow(window_capacity)
         self._gpu = SlidingWindow(window_capacity)
         self._cpu_state = ThermalState.NORMAL
@@ -142,6 +169,11 @@ class ThermalAnalyser:
         self._profile: CoolingProfile | None = None
         self._last_anomalies: list[Anomaly] = []
         self._last_cpu_rate: float | None = None
+        # Timestamp each tracked sensor was last seen available (so the grace
+        # window is measured from the last good reading, not the first miss),
+        # and the set already reported so one dropout yields one anomaly.
+        self._last_present_at: dict[MetricKey, float] = {}
+        self._reported_missing: set[MetricKey] = set()
 
     # -- configuration -----------------------------------------------------
 
@@ -150,6 +182,14 @@ class ThermalAnalyser:
 
     def set_hysteresis(self, hysteresis_c: float) -> None:
         self.hysteresis_c = max(0.0, float(hysteresis_c))
+
+    def set_rapid_rise_threshold(self, c_per_min: float) -> None:
+        """Set the °C/min rate that counts as a rapid thermal rise."""
+        self._rapid_rise_c_per_min = max(0.1, float(c_per_min))
+
+    def set_sensor_stale_after_s(self, seconds: float) -> None:
+        """Set how long a sensor must stay missing before it is reported."""
+        self._sensor_stale_after_s = max(0.0, float(seconds))
 
     @property
     def last_anomalies(self) -> list[Anomaly]:
@@ -275,7 +315,10 @@ class ThermalAnalyser:
         gpu_rate: float | None,
     ) -> list[Anomaly]:
         anomalies: list[Anomaly] = []
-        rapid_rise = self._stable_band * 6.0
+        anomalies.extend(self._detect_sensor_disappearance(snapshot))
+        rapid_rise = self._rapid_rise_c_per_min
+        if rapid_rise is None:
+            rapid_rise = self._stable_band * 6.0
         for label, rate, state in (
             ("CPU", cpu_rate, self._cpu_state),
             ("GPU", gpu_rate, self._gpu_state),
@@ -307,6 +350,54 @@ class ThermalAnalyser:
                     )
                 )
         return anomalies
+
+    def _detect_sensor_disappearance(
+        self, snapshot: TelemetrySnapshot
+    ) -> list[Anomaly]:
+        """Flag a tracked metric that was reporting and then went away.
+
+        The window is measured from the last good reading: a sensor is reported
+        once it has been absent for ``sensor_stale_after_s``, so a single
+        dropped sample (a transient backend hiccup) does not raise an anomaly.
+        A metric never seen available is never a dropout, and a sensor that
+        returns before the window elapses clears its pending report.
+        """
+        now = snapshot.timestamp.timestamp()
+        present = {
+            key
+            for key in self._sensor_metrics
+            if (metric := snapshot.metrics.get(key)) is not None and metric.available
+        }
+        for key in present:
+            self._last_present_at[key] = now
+            self._reported_missing.discard(key)  # a returning sensor can re-arm
+        expired = sorted(
+            key.value
+            for key, last_seen in self._last_present_at.items()
+            if key not in present
+            and key not in self._reported_missing
+            and now - last_seen >= self._sensor_stale_after_s
+        )
+        if not expired:
+            return []
+        # Forget the reported sensors so one dropout produces one anomaly, not
+        # one per sample; they re-arm if the sensor ever reports again.
+        self._reported_missing.update(
+            key for key in self._last_present_at if key.value in expired
+        )
+        return [
+            Anomaly(
+                kind=AnomalyKind.SENSOR_DISAPPEARED,
+                summary="A sensor stopped reporting",
+                detail=(
+                    "These sensors were reporting and have been unavailable for "
+                    f"at least {self._sensor_stale_after_s:g}s: "
+                    + ", ".join(expired)
+                    + ". The reading may be stale; treat downstream values with caution."
+                ),
+                confidence="medium",
+            )
+        ]
 
 
 def _trend(rate_c_per_min: float | None, stable_band: float) -> ThermalTrend:
