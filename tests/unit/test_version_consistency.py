@@ -12,6 +12,7 @@ declaration drifts.
 from __future__ import annotations
 
 import re
+import sys
 import tomllib
 from pathlib import Path
 
@@ -57,12 +58,32 @@ def test_inno_setup_default_matches_app_version() -> None:
     assert match.group(1) == APP_VERSION
 
 
-def test_windows_version_resource_matches_app_version() -> None:
-    text = (ROOT / "installer" / "version_info.txt").read_text(encoding="utf-8")
-    for field in ("FileVersion", "ProductVersion"):
-        match = re.search(rf"StringStruct\('{field}',\s*'([^']+)'\)", text)
-        assert match, f"{field} not found in version_info.txt"
-        assert match.group(1) == APP_VERSION, f"{field} drifted from APP_VERSION"
+def test_generated_windows_version_resource_matches_app_version() -> None:
+    """The VERSIONINFO resource the build writes must carry APP_VERSION.
+
+    ``installer/version_info.txt`` is generated (and gitignored), so the test
+    drives the real generator rather than reading a stale copy that is not even
+    present on a fresh checkout.
+    """
+    import importlib
+
+    sys.path.insert(0, str(ROOT / "scripts" / "build"))
+    build = importlib.import_module("build")
+
+    target = ROOT / "installer" / "version_info.txt"
+    previous = target.read_bytes() if target.exists() else None
+    try:
+        generated = build._write_version_info(APP_VERSION, "testbuild")
+        text = generated.read_text(encoding="utf-8")
+        for field in ("FileVersion", "ProductVersion"):
+            match = re.search(rf"StringStruct\('{field}',\s*'([^']+)'\)", text)
+            assert match, f"{field} not generated"
+            assert match.group(1) == APP_VERSION, f"{field} drifted from APP_VERSION"
+    finally:
+        if previous is None:
+            target.unlink(missing_ok=True)
+        else:
+            target.write_bytes(previous)
 
 
 def test_readme_download_links_use_the_app_version() -> None:
