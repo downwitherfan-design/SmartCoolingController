@@ -45,6 +45,12 @@ then elide horizontally; wrapping runs are fitted by height. Every custom
 painter calls it instead of `painter.drawText` for boxed text, and every box is
 sized from the widget's real geometry rather than a magic constant.
 
+The fitter and the detector must agree on what "fits" means, so both measure the
+**ink** (`QFontMetricsF.tightBoundingRect`), not the advance box. Persian and
+Arabic glyphs overhang their advance width: `هیچ` reports a 24px advance but
+29px of ink, so a fitter trusting `boundingRect` left it overflowing a 26px box
+and the detector flagged it. `tests/ui/test_painted_text.py` pins this case.
+
 Enforcement: `layout_check.py::find_painted_text_problems` renders a widget
 through a `QPainter` subclass that records each `drawText` whose ink (or wrapped
 height) exceeds its rectangle. The head-less `gui_audit.py` runs both the

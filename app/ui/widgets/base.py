@@ -214,10 +214,18 @@ def fit_text(
     font = QFont(base)
     while True:
         metrics = QFontMetricsF(font)
-        bounds = metrics.boundingRect(
-            QRectF(0, 0, width, height), Qt.TextFlag(flags), text
-        )
-        if bounds.width() <= width + FIT_TOL and bounds.height() <= height + FIT_TOL:
+        if wrap:
+            needed = metrics.boundingRect(
+                QRectF(0, 0, width, height), Qt.TextFlag(flags), text
+            ).height()
+            fits = needed <= height + FIT_TOL
+        else:
+            # Measure the *ink*, not the advance box: Persian and Arabic glyphs
+            # overhang their advance width, so a run that fits by boundingRect
+            # can still paint past the box edge.
+            ink = metrics.tightBoundingRect(text)
+            fits = ink.width() <= width + FIT_TOL and ink.height() <= height + FIT_TOL
+        if fits:
             break
         if font.pointSizeF() > floor:
             font.setPointSizeF(max(floor, font.pointSizeF() - 0.5))

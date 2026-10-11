@@ -103,6 +103,35 @@ def test_trend_strip_fits(theme, translator, qapp) -> None:
     strip.deleteLater()
 
 
+def test_fit_text_measures_ink_not_advance_width(qapp) -> None:
+    """Persian glyphs overhang their advance box; fitting must measure the ink.
+
+    ``هیچ`` (Persian "none") reports a 24px advance width but 29px of ink.  A
+    fitter that trusted ``boundingRect`` left it 29px wide in a 26px box, which
+    the painted-text detector correctly flagged.  ``fit_text`` must use the ink
+    metrics so the two agree.
+    """
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QFont, QFontMetricsF, QImage, QPainter
+
+    from app.ui.design import TYPE
+    from app.ui.widgets.base import fit_text
+
+    image = QImage(64, 64, QImage.Format.Format_ARGB32)  # keep alive for the painter
+    painter = QPainter(image)
+    font = QFont()
+    font.setPointSizeF(TYPE["caption"])
+    font.setWeight(QFont.Weight.DemiBold)
+    painter.setFont(font)
+    box = QRectF(0, 0, 26, 21)
+    _text, _flags, fitted = fit_text(
+        painter, "هیچ", box, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+    )
+    painter.end()
+    ink = QFontMetricsF(fitted).tightBoundingRect("هیچ")
+    assert ink.width() <= box.width() + 2, f"ink {ink.width()}px still overflows {box.width()}px"
+
+
 def test_detector_reports_a_deliberate_overflow(qapp) -> None:
     """The detector must actually bite, or the tests above are vacuous."""
     from PySide6.QtCore import QRectF, Qt
