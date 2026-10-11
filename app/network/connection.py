@@ -239,6 +239,11 @@ class ConnectionManager:
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop = threading.Event()
+        #: Wakes the idle/backoff wait the moment ``stop()`` is called.  Without
+        #: it the loop would sit in ``asyncio.sleep`` for up to the longest
+        #: backoff (30 s) and ``stop()`` — which runs on the GUI thread during
+        #: shutdown — would block for that whole time.
+        self._wake: asyncio.Event | None = None
         self._desired: DiscoveredDevice | None = None
         self._device: Esp32Device | None = None
         self._status = Esp32Status()
@@ -328,6 +333,7 @@ class ConnectionManager:
         self._request_disconnect()
         self._set_state(_STOPPING, "", epoch=None)
         self._stop.set()
+        self._signal_stop()
         loop = self._loop
         if loop is not None and loop.is_running():
             mock = self._mock
@@ -401,6 +407,28 @@ class ConnectionManager:
         if loop is not None and loop.is_running() and event is not None:
             with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(event.set)
+
+    def _signal_stop(self) -> None:
+        """Wake an idle/backoff wait so ``stop()`` does not block (thread-safe)."""
+        loop = self._loop
+        wake = self._wake
+        if loop is not None and loop.is_running() and wake is not None:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(wake.set)
+
+    async def _wait(self, seconds: float) -> None:
+        """Sleep, but return early when ``stop()`` is signalled.
+
+        Every long wait on the connection loop goes through here so shutdown is
+        bounded by the loop's reaction time (~one event-loop turn), not by the
+        wait itself.
+        """
+        wake = self._wake
+        if wake is None:
+            await asyncio.sleep(seconds)
+            return
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(wake.wait(), timeout=seconds)
 
     # -- commands ----------------------------------------------------------
 
@@ -549,12 +577,13 @@ class ConnectionManager:
             self._loop = None
 
     async def _run(self) -> None:
+        self._wake = asyncio.Event()
         while not self._stop.is_set():
             with self._lock:
                 target = self._desired
                 want = self._want_connect
             if target is None or not want:
-                await asyncio.sleep(0.2)
+                await self._wait(0.2)
                 continue
 
             attempt_started = time.monotonic()
@@ -599,7 +628,7 @@ class ConnectionManager:
                 self._diag.reconnect_count += 1
             epoch = self._new_epoch()
             self._set_state(_RECONNECTING, f"retrying in {delay:.1f}s", epoch=epoch)
-            await asyncio.sleep(delay)
+            await self._wait(delay)
 
     def _session_was_healthy(self, attempt_started: float) -> bool:
         since = self._healthy_since

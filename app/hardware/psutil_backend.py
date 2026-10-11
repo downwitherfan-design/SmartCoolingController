@@ -13,6 +13,7 @@ from __future__ import annotations
 import platform
 import socket
 import sys
+import time
 from typing import Any
 
 from app.core.clock import utc_timestamp
@@ -36,6 +37,12 @@ class PsutilBackend(HardwareMonitorBackend):
 
     kind = BackendKind.PSUTIL
 
+    #: Mount topology changes very rarely, but ``disk_partitions()`` is a real
+    #: syscall walk (measured ~34 ms per call here, 50× the rest of the read).
+    #: Cache the list for this long and re-scan only when it expires; per-mount
+    #: *usage* is still read fresh every sample, so free-space stays truthful.
+    _PARTITIONS_TTL_S = 30.0
+
     def __init__(self) -> None:
         super().__init__()
         self._profile = HardwareProfile()
@@ -43,6 +50,21 @@ class PsutilBackend(HardwareMonitorBackend):
         self._temperature_keys: list[str] = []
         # Prime psutil's non-blocking CPU counter so the first read is instant.
         self._last_cpu_times: Any = None
+        self._partitions: list[Any] | None = None
+        self._partitions_at = 0.0
+
+    def _partitions_cached(self) -> list[Any]:
+        """Return the mount list, refreshing it at most once per TTL."""
+        now = time.monotonic()
+        if self._partitions is None or now - self._partitions_at >= self._PARTITIONS_TTL_S:
+            try:
+                self._partitions = list(psutil.disk_partitions(all=False))
+            except Exception:
+                # Keep the previous list rather than flapping to empty on a
+                # transient failure; the caller treats a missing list as empty.
+                self._partitions = self._partitions or []
+            self._partitions_at = now
+        return self._partitions
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -173,11 +195,7 @@ class PsutilBackend(HardwareMonitorBackend):
 
     def _read_storage(self, now: float) -> list[SensorReading]:
         readings: list[SensorReading] = []
-        try:
-            partitions = psutil.disk_partitions(all=False)
-        except Exception:
-            return readings
-        for partition in partitions:
+        for partition in self._partitions_cached():
             try:
                 usage = psutil.disk_usage(partition.mountpoint)
             except Exception:
@@ -243,7 +261,7 @@ class PsutilBackend(HardwareMonitorBackend):
             ram_gb = 0.0
         storage_models: list[str] = []
         try:
-            for partition in psutil.disk_partitions(all=False):
+            for partition in self._partitions_cached():
                 if partition.device:
                     storage_models.append(partition.device)
         except Exception:

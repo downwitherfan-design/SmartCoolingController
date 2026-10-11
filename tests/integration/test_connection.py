@@ -162,6 +162,56 @@ def test_latency_is_measured_only_from_a_heartbeat_answer(manager: ConnectionMan
     assert 0 <= manager.status.latency_ms < 1000
 
 
+def test_stop_interrupts_a_long_reconnect_backoff(bus: EventBus) -> None:
+    """``stop()`` must not block for the whole backoff (it runs on the GUI thread).
+
+    With the shipped 30 s top of the backoff schedule, an uninterruptible sleep
+    would freeze shutdown for up to half a minute.  The loop must react to the
+    stop signal within roughly one event-loop turn.
+    """
+    mgr = ConnectionManager(
+        bus,
+        use_websocket=True,
+        heartbeat_interval_s=0.1,
+        heartbeat_timeout_s=0.3,
+        connect_timeout_s=0.5,
+        backoff_schedule=[5.0],  # a deliberately long wait to be interrupted
+        reconnect_jitter=0.0,
+        healthy_reset_s=0.05,
+    )
+    try:
+        device = mgr.enable_mock(host="127.0.0.1", port=8823)
+        mgr.connect_device(device)
+        # Wait until the loop has entered the backoff (state RECONNECTING), then
+        # kill the mock so the next attempt fails and the loop parks in _wait().
+        assert _wait_for(lambda: mgr.state is ConnectionState.CONNECTED, timeout=3.0)
+        mock = mgr._mock
+        assert mock is not None
+        mgr._stop_mock(mock)
+        assert _wait_for(lambda: mgr.state is ConnectionState.RECONNECTING, timeout=4.0)
+
+        start = time.monotonic()
+        mgr.stop(timeout=5.0)
+        elapsed = time.monotonic() - start
+        assert elapsed < 1.0, f"stop() blocked for {elapsed:.2f}s in the backoff wait"
+    finally:
+        mgr.stop(timeout=5.0)
+
+
+def test_stop_interrupts_the_idle_poll_wait(bus: EventBus) -> None:
+    """An idle (never-connected) loop must stop promptly, not after the poll tick."""
+    mgr = ConnectionManager(bus, use_websocket=True, backoff_schedule=[0.05])
+    try:
+        mgr.start()
+        assert _wait_for(lambda: mgr._loop is not None and mgr._loop.is_running(), timeout=3.0)
+        time.sleep(0.05)  # let the loop reach its idle wait
+        start = time.monotonic()
+        mgr.stop(timeout=5.0)
+        assert (time.monotonic() - start) < 1.0
+    finally:
+        mgr.stop(timeout=5.0)
+
+
 def test_malformed_frames_degrade_but_do_not_disconnect(manager: ConnectionManager) -> None:
     device, _mock = _start_mock(manager, port=8819, malformed_every=3)
     manager.connect_device(device)
