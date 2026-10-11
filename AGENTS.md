@@ -271,6 +271,36 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
   freeze CPU/GPU temperatures. `_Model` sets `extra="ignore"`, so a settings
   file written by an older build still loads.
 
+## V2.2 invariants
+
+- **One live anomaly path.** `ThermalAnalyser._detect_anomalies` is the only
+  detector the running app uses; `app/analytics/anomaly.py::AnomalyDetector` is
+  a tested *reference* and must not be wired into the engine (see AD-2 in
+  `docs/V2_2_ARCHITECTURE_DECISIONS.md`). Wiring it would duplicate state and
+  publish on a topic the shell does not subscribe to.
+- **The sensor-dropout grace window is `telemetry.stale_after_s`.** The live
+  analyser reports `SENSOR_DISAPPEARED` only after a tracked sensor has been
+  absent for that long (measured from its last good reading). Keep the
+  constructor argument and the `update_config()` push in `app/services` in step
+  — `tests/integration/test_services.py` pins both.
+- **Liveness thresholds scale with the setting.** `ConnectionManager`'s stale
+  and degraded windows derive from `telemetry.stale_after_s`
+  (`set_stale_after_s`, degraded = stale / 2); do not reintroduce module
+  constants.
+- **`PerformanceMode.LIGHTWEIGHT` is load-bearing.** It must reduce motion
+  (`build_theme`) and chart cost (`LiveChart` clip + auto peak downsampling);
+  `tests/ui/test_charts.py` fails if either is dropped.
+
+## GUI correctness gate
+
+`app/ui/layout_check.py::find_layout_problems` is the single definition of a
+correctly-laid-out widget tree; both the UI test-suite and the head-less audit
+use it. Run the gate off-screen before shipping UI changes:
+
+```bash
+QT_QPA_PLATFORM=offscreen python scripts/diagnostics/gui_audit.py   # exits non-zero on defects
+```
+
 ## GitHub push credential
 
 The owner's `GITHUB_TOKEN` env var is read-only for this repo (fine-grained,
