@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import timedelta
 
 import pytest
 
+from app.core.clock import utc_now
 from app.core.enums import ConnectionState
 from app.core.events import EventBus
 from app.network.connection import ConnectionManager
@@ -228,3 +230,48 @@ def test_no_session_leak_across_repeated_cycles(bus: EventBus) -> None:
         # After stop the mock socket is released.
         assert mock is not None
         assert not mock.has_listener
+
+
+def test_stale_window_is_configurable_not_hardcoded(bus: EventBus) -> None:
+    """The stale/degraded thresholds must follow the user's setting.
+
+    They used to be module constants (4.0 s / 2.0 s) that ignored
+    ``telemetry.stale_after_s`` entirely, so the settings slider did nothing.
+    This drives the real liveness check at the boundary to prove the window
+    now scales with the configured value.
+    """
+    mgr = ConnectionManager(
+        bus,
+        use_websocket=False,
+        heartbeat_interval_s=1.0,
+        heartbeat_timeout_s=3.0,
+        connect_timeout_s=1.0,
+        stale_after_s=10.0,
+    )
+    try:
+        assert mgr.stale_after_s == 10.0
+        assert mgr.degraded_after_s == 5.0
+        # Shrinking the window takes effect immediately and keeps the ordering.
+        mgr.set_stale_after_s(3.0)
+        assert mgr.degraded_after_s == 1.5
+
+        # An absurd value is clamped so the two thresholds never invert.
+        mgr.set_stale_after_s(-5.0)
+        assert mgr.stale_after_s >= mgr.degraded_after_s > 0.0
+
+        # Drive the real liveness transition with a 4 s old packet against a
+        # 6 s window: late enough to degrade, not yet stale.
+        mgr.set_stale_after_s(6.0)
+        mgr._set_state(ConnectionState.CONNECTING, epoch=mgr._epoch)
+        mgr._set_state(ConnectionState.CONNECTED, epoch=mgr._epoch)
+        mgr._status.last_packet_at = utc_now() - timedelta(seconds=4.0)
+        mgr._check_stale(mgr._epoch)
+        assert mgr.state is ConnectionState.DEGRADED
+
+        # Past the whole window it becomes stale.
+        mgr._status.last_packet_at = utc_now() - timedelta(seconds=7.0)
+        mgr._check_stale(mgr._epoch)
+        assert mgr.state is ConnectionState.STALE
+    finally:
+        mgr.stop(timeout=2.0)
+

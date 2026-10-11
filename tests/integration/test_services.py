@@ -357,3 +357,122 @@ def test_shutdown_survives_a_failing_subsystem(tmp_path) -> None:
 
     services.telemetry.stop = original  # type: ignore[method-assign]
     services.persistence.close = original_close  # type: ignore[method-assign]
+
+
+def test_background_discovery_returns_immediately_and_completes(data_root, monkeypatch) -> None:
+    """``start(background_discovery=True)`` must not block the caller.
+
+    Regression: ``start()`` called ``registry.discover()`` synchronously, so a
+    slow WMI/LHM ``open()`` froze the GUI thread before the first paint.  With
+    background discovery the call returns while the worker does the work, and
+    the result is advertised on the bus.
+    """
+    import threading
+
+    from app.hardware.base import HardwareMonitorBackend
+    from app.hardware.registry import HardwareRegistry
+    from app.models.sensors import HardwareCategory, SensorReading, SensorType
+    from app.services import TOPIC_DISCOVERY, ApplicationServices
+
+    opened = threading.Event()
+    release = threading.Event()
+
+    class _BlockingBackend(HardwareMonitorBackend):
+        kind = BackendKind.PSUTIL
+
+        def is_available(self) -> bool:
+            return True
+
+        def open(self) -> None:
+            opened.set()
+            release.wait(3.0)  # simulate a slow native open
+            self._mark_ready()
+
+        def read(self) -> list[SensorReading]:
+            return [
+                SensorReading(
+                    sensor_id="slow.temp",
+                    hardware_name="Slow",
+                    hardware_category=HardwareCategory.CPU,
+                    sensor_name="CPU",
+                    sensor_type=SensorType.TEMPERATURE,
+                    value=40.0,
+                    unit="°C",
+                    backend=self.kind,
+                )
+            ]
+
+    monkeypatch.setenv("SMARTCOOLING_DATA_MODE", "standard")
+    monkeypatch.setenv("SMARTCOOLING_DATA_DIR", str(data_root))
+    services = ApplicationServices()
+    services.config.general.start_telemetry = False
+    services.config.general.auto_connect_esp32 = False
+    services.config.general.first_run_completed = True
+    services.registry = HardwareRegistry(factories=[_BlockingBackend])
+    seen: list[object] = []
+    services.bus.subscribe(TOPIC_DISCOVERY, lambda event: seen.append(event.payload))
+
+    try:
+        start = time.perf_counter()
+        services.start(background_discovery=True)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.0, f"start() blocked for {elapsed:.2f}s"
+        assert services.discovery_finished is False
+        assert opened.wait(2.0), "discovery worker never started"
+
+        release.set()
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not services.discovery_finished:
+            time.sleep(0.02)
+        assert services.discovery_finished, "discovery never completed"
+        assert seen, "no discovery event was published"
+    finally:
+        release.set()
+        services.shutdown()
+
+
+def test_stale_after_setting_reaches_the_connection_manager(services) -> None:
+    """The telemetry stale window is read from config, not hardcoded.
+
+    ``telemetry.stale_after_s`` used to be persisted and shown in Settings but
+    never consulted: the connection manager used a module constant, so moving
+    the slider changed nothing until (and even after) a restart.  This pins the
+    wiring from the setting through ``update_config`` to the live manager.
+    """
+    assert services.connection.stale_after_s == services.config.telemetry.stale_after_s
+
+    services.update_config(telemetry={"stale_after_s": 12.5})
+    assert services.connection.stale_after_s == 12.5
+    assert services.connection.degraded_after_s == 6.25
+
+
+def test_rapid_rise_setting_reaches_the_analyser(services) -> None:
+    """``alerts.rapid_rise_c_per_min`` is consulted, not just persisted.
+
+    It used to be stored and shown in Settings while the analyser used a
+    hardcoded multiple of its stable band.  This pins the setting through
+    ``update_config`` to the live analyser.
+    """
+    assert services.telemetry.analyser._rapid_rise_c_per_min == (
+        services.config.alerts.rapid_rise_c_per_min
+    )
+
+    services.update_config(alerts={"rapid_rise_c_per_min": 4.5})
+    assert services.telemetry.analyser._rapid_rise_c_per_min == 4.5
+
+
+def test_stale_after_setting_reaches_the_anomaly_grace_window(services) -> None:
+    """The sensor-dropout grace window follows ``telemetry.stale_after_s``.
+
+    The live analyser gained ``SENSOR_DISAPPEARED`` detection whose grace window
+    is the same stale window the connection manager uses; both must track the
+    setting, at construction and through ``update_config``.
+    """
+    assert services.telemetry.analyser._sensor_stale_after_s == (
+        services.config.telemetry.stale_after_s
+    )
+
+    services.update_config(telemetry={"stale_after_s": 7.5})
+    assert services.telemetry.analyser._sensor_stale_after_s == 7.5
+
+

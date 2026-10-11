@@ -73,3 +73,43 @@ def test_history_keeps_user_choice_after_first_show(qapp, services) -> None:
         window.show_page("diagnostics")
         window.show_page("history")
         assert page._range == "d7"
+
+
+def test_lightweight_mode_reduces_chart_detail(qapp, services) -> None:
+    """Lightweight mode must actually change rendering, not just be stored.
+
+    The setting promised "reduces animation and chart detail" but was a no-op:
+    nothing read ``performance.mode``.  This drives the real chart the dashboard
+    builds and asserts the traces are clipped + downsampled.
+    """
+    from app.core.enums import PerformanceMode
+
+    with _window(qapp, services) as window:
+        normal = window._pages["dashboard"].chart_panel.chart
+        normal_curve = normal._curves["cpu"]
+        assert normal_curve.opts["clipToView"] is False
+        assert normal_curve.opts["downsample"] == 1
+        assert normal._lightweight is False
+
+        services.config.performance.mode = PerformanceMode.LIGHTWEIGHT
+        window._on_performance_changed(PerformanceMode.LIGHTWEIGHT)
+
+        light = window._pages["dashboard"].chart_panel.chart
+        light_curve = light._curves["cpu"]
+        assert light._lightweight is True
+        assert light_curve.opts["clipToView"] is True
+        assert light_curve.opts["autoDownsample"] is True
+
+
+def test_lightweight_mode_softens_motion(qapp, services) -> None:
+    """The tooltip also promises less animation; motion is capped at LOW."""
+    from app.core.enums import AnimationLevel, PerformanceMode
+
+    with _window(qapp, services) as window:
+        services.config.appearance.animation_level = AnimationLevel.HIGH
+        services.config.performance.mode = PerformanceMode.LIGHTWEIGHT
+        theme = window._resolve_theme()
+        assert theme.lightweight is True
+        assert theme.animation is AnimationLevel.LOW
+        assert theme.duration(200) < 200
+

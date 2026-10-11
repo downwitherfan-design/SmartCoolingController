@@ -80,3 +80,59 @@ Mutation evidence (isolated copy, `/tmp/mut`, never committed):
   FAILS.
 - replace coalescing with a queue → `test_health_worker_coalesces_overlapping_requests`
   FAILS with `assert 51 <= 2`.
+
+## Phase D — lightweight performance mode made real (DONE)
+
+Finding: `PerformanceMode.LIGHTWEIGHT` was a genuine no-op. It was persisted and
+selectable in Settings, but nothing read `performance.mode`; `build_theme` never
+received it, and the charts always rendered at full fidelity.
+
+Fix:
+- `build_theme(..., performance=...)` now sets `Theme.lightweight`, and caps the
+  motion at `AnimationLevel.LOW` (unless animation is already off) so the
+  setting honours its own "reduces animation and chart detail" promise.
+- `MainWindow._resolve_theme()` passes `services.config.performance.mode`.
+- `LiveChart` reads `theme.lightweight`: traces use `setClipToView(True)` and
+  `setDownsampling(auto=True, method="peak")`, and antialiasing is disabled, so
+  a long-running trace stays cheap to repaint. `apply_theme()` re-syncs these in
+  place when the mode changes.
+
+Tests (mutation-verified):
+- `test_lightweight_mode_reduces_chart_detail` — drives the real dashboard chart
+  and asserts clip + auto-downsample engage after a live mode change.
+- `test_lightweight_mode_softens_motion` — asserts `theme.lightweight` and the
+  motion cap.
+Mutation evidence (isolated copy, `/tmp/mut7`): removing the two curve calls
+makes the chart test FAIL.
+
+## Phase E — one live anomaly path; dead threshold consumed (DONE)
+
+Finding: two anomaly implementations existed. `app/analytics/anomaly.py::
+AnomalyDetector` is exercised only by tests and is never constructed by
+production code; `ThermalAnalyser._detect_anomalies` is the live detector. The
+standalone detector is a tested *reference*, not a second live engine (AD-2).
+
+Real defect found while auditing: the live analyser never emitted
+`SENSOR_DISAPPEARED` — a tracked sensor going from a valid reading to
+`UNAVAILABLE` — even though `AnomalyKind.SENSOR_DISAPPEARED` and
+`AnomalyThresholds.stale_after_s` exist for exactly that case.
+
+Fix:
+- `ThermalAnalyser` now tracks each metric's last good timestamp and reports a
+  dropout once the sensor has been absent for `sensor_stale_after_s` (measured
+  from the last good reading, so one dropped sample does not fire). Reporting
+  is once per episode; a returning sensor re-arms.
+- The grace window is the configured `telemetry.stale_after_s`: wired through
+  `TelemetryEngine(..., sensor_stale_after_s=...)` at construction and pushed
+  live via `update_config()` → `analyser.set_sensor_stale_after_s()`.
+
+Tests (mutation-verified):
+- `test_vanished_sensor_is_reported_by_the_live_analyser` — the once-per-episode
+  transition.
+- `test_transient_sensor_drop_does_not_raise_an_anomaly` — the grace window.
+- `test_sensor_that_was_never_present_is_not_a_dropout` — no false positive.
+- `test_stale_after_setting_reaches_the_anomaly_grace_window` — live wiring.
+Mutation evidence (isolated copies): dropping the `_detect_sensor_disappearance`
+call fails the first; dropping the `update_config` push fails the fourth.
+
+Full suite: **352 passed** (`QT_QPA_PLATFORM=offscreen`, `-o addopts=""`).

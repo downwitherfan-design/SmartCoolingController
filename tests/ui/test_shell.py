@@ -213,47 +213,37 @@ def test_language_switch_never_shows_raw_keys(window) -> None:
         assert leaked == [], f"{key}: raw i18n keys shown: {leaked[:8]}"
 
 
-def _clipped_labels(root) -> list[str]:
-    from PySide6.QtWidgets import QLabel
+@pytest.mark.parametrize("language", [Language.ENGLISH, Language.PERSIAN])
+@pytest.mark.parametrize("size", [(1280, 800), (1440, 900), (1024, 700)])
+def test_every_page_lays_out_without_defects(window, qapp, language, size) -> None:
+    """No page may clip text, overflow a parent, or overlap a sibling.
 
-    from app.ui.widgets.atoms import ElidedLabel
+    This asserts the *real* painted geometry Qt computed — not just a size
+    hint — so it catches stylesheet box-model regressions (a button that
+    ignores ``setFixedSize`` and covers the label beneath it) and compound
+    values clipped in a narrow tile.  It failed on 113 defects before the fix.
+    """
+    from app.ui.layout_check import find_layout_problems
+    from app.ui.shell import PAGE_CLASSES
 
-    clipped: list[str] = []
-    for label in root.findChildren(QLabel):
-        text = label.text().strip()
-        # Wrapping and eliding labels are designed to fit by design.
-        if not text or label.wordWrap() or isinstance(label, ElidedLabel):
-            continue
-        needed = label.sizeHint().width()
-        if needed > label.width() + 2:
-            clipped.append(f"{text!r} needs {needed}px, has {label.width()}px")
-    return clipped
-
-
-def test_no_widget_text_is_clipped_in_english(window) -> None:
-    from app.core.enums import Language
-
-    window.resize(1440, 900)
+    window.resize(*size)
     window.show()
-    window._on_language_changed(Language.ENGLISH)
-    for key in ("dashboard", "history", "diagnostics"):
+    window._on_language_changed(language)
+
+    snapshot = window.services.telemetry.sample_once()
+    for page in window._pages.values():
+        page.on_snapshot(snapshot)
+        page._flush_refresh()
+
+    failures: list[str] = []
+    for key in PAGE_CLASSES:
         window.show_page(key)
         window.layout().activate()
-        clipped = _clipped_labels(window._pages[key].content)
-        assert clipped == [], f"{key} (en) clipped: {clipped[:6]}"
-
-
-def test_no_widget_text_is_clipped_in_persian(window) -> None:
-    from app.core.enums import Language
-
-    window.resize(1440, 900)
-    window.show()
-    window._on_language_changed(Language.PERSIAN)
-    for key in ("dashboard", "history", "diagnostics"):
-        window.show_page(key)
-        window.layout().activate()
-        clipped = _clipped_labels(window._pages[key].content)
-        assert clipped == [], f"{key} (fa) clipped: {clipped[:6]}"
+        window._pages[key].content.updateGeometry()
+        qapp.processEvents()
+        problems = find_layout_problems(window._pages[key].content)
+        failures.extend(f"{key}: {problem}" for problem in problems)
+    assert failures == [], f"layout defects at {size} {language.value}: {failures[:8]}"
 
 
 def _pump(app, seconds: float = 2.0, until=None) -> bool:

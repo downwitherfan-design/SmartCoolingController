@@ -217,6 +217,7 @@ class ConnectionManager:
         reconnect_jitter: float = 0.25,
         healthy_reset_s: float = 5.0,
         require_authentication: bool = True,
+        stale_after_s: float = STALE_AFTER_S,
     ) -> None:
         self._bus = bus
         self._use_websocket = use_websocket
@@ -230,6 +231,10 @@ class ConnectionManager:
         self._reconnect_jitter = max(0.0, min(1.0, reconnect_jitter))
         self._healthy_reset_s = healthy_reset_s
         self._require_auth = require_authentication
+        # The link is "degraded" once packets are late by half the stale window,
+        # and "stale" once they stop for the whole window.  Both scale with the
+        # user's telemetry.stale_after_s setting.
+        self.set_stale_after_s(stale_after_s)
 
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -906,15 +911,36 @@ class ConnectionManager:
             self._lost += min(gap, 1000)
         self._peer_sequence = sequence
 
+    def set_stale_after_s(self, seconds: float) -> None:
+        """Set how long without packets before the link is considered stale.
+
+        The degraded threshold is half the stale window, so the two states
+        always stay ordered for any positive value the user picks.
+        """
+        stale = max(0.5, float(seconds))
+        self._stale_after_s = stale
+        self._degraded_after_s = stale / 2.0
+
+    @property
+    def stale_after_s(self) -> float:
+        return self._stale_after_s
+
+    @property
+    def degraded_after_s(self) -> float:
+        return self._degraded_after_s
+
     def _check_stale(self, epoch: int) -> None:
         last = self._status.last_packet_at
         if last is None:
             return
         age = (utc_now() - last).total_seconds()
-        if age >= STALE_AFTER_S and self._state is not ConnectionState.STALE:
+        if age >= self._stale_after_s and self._state is not ConnectionState.STALE:
             self._set_state(_STALE, "no packets received", epoch=epoch)
             self._status.health = HealthStatus.WARNING
-        elif DEGRADED_AFTER_S <= age < STALE_AFTER_S and self._state is ConnectionState.CONNECTED:
+        elif (
+            self._degraded_after_s <= age < self._stale_after_s
+            and self._state is ConnectionState.CONNECTED
+        ):
             self._set_state(_DEGRADED, "packets delayed", epoch=epoch)
             self._status.health = HealthStatus.WARNING
 

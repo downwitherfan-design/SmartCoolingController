@@ -37,10 +37,11 @@ from PySide6.QtWidgets import (
 
 from app import APP_NAME
 from app.application.health_worker import HealthCheckWorker
-from app.core.enums import ConnectionState, Language, PerformanceMode
+from app.core.enums import ConnectionState, HealthStatus, Language, PerformanceMode
 from app.core.events import Event
 from app.models.telemetry import TelemetrySnapshot
 from app.network.connection import TOPIC_STATE as TOPIC_CONNECTION
+from app.services import TOPIC_DISCOVERY
 from app.services.alerts import TOPIC_ALERT, TOPIC_ALERT_CLEARED, TOPIC_NOTIFY
 from app.services.cooling_control import TOPIC_MODE
 from app.services.health import TOPIC_HEALTH
@@ -175,6 +176,7 @@ class MainWindow(QMainWindow):
             accent=appearance.accent,
             animation=appearance.animation_level,
             show_glow=appearance.show_glow,
+            performance=self.services.config.performance.mode,
         )
 
     def _app_icon(self) -> QIcon:
@@ -307,9 +309,15 @@ class MainWindow(QMainWindow):
                 TOPIC_CONNECTION,
                 TOPIC_SESSIONS,
                 TOPIC_MODE,
+                TOPIC_DISCOVERY,
             }
         )
         self._bridge.received.connect(self._on_bus_event)
+        # If discovery is still running (started in the background), show an
+        # explicit initialising state instead of a stale "no hardware" message.
+        if not self.services.discovery_finished:
+            self.rail.set_health(HealthStatus.UNKNOWN)
+            self.status.set_backend("initialising")
 
     def _on_bus_event(self, event: Event) -> None:
         """Dispatch a bus event on the GUI thread."""
@@ -328,6 +336,27 @@ class MainWindow(QMainWindow):
             self._on_session(event)
         elif topic == TOPIC_MODE:
             self._on_mode(event)
+        elif topic == TOPIC_DISCOVERY:
+            self._on_discovery(event)
+
+    def _on_discovery(self, event: Event) -> None:
+        """Hardware discovery finished on the worker thread — update the UI."""
+        result = event.payload
+        if isinstance(result, dict) and result.get("error"):
+            self.status.set_backend("unavailable")
+            self.rail.set_health(HealthStatus.ERROR)
+            self._health_worker.request()
+            return
+        selected = getattr(result, "selected", None)
+        name = selected.value if selected is not None else "none"
+        simulated = bool(self.services.simulation_enabled)
+        self.status.set_backend(name, simulated=simulated)
+        self._health_worker.request()
+        page = self._pages.get("dashboard")
+        if page is not None:
+            handler = getattr(page, "on_discovery", None)
+            if callable(handler):
+                handler(result)
 
     def _on_snapshot(self, event: Event) -> None:
         snapshot: TelemetrySnapshot = event.payload

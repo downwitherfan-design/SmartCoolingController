@@ -367,6 +367,7 @@ class MetricCard(ThemedWidget):
         head.addWidget(self.badge)
         self.pin_button = QPushButton()
         self.pin_button.setProperty("variant", "ghost")
+        self.pin_button.setProperty("iconOnly", "true")
         self.pin_button.setFixedSize(24, 24)
         self.pin_button.setCheckable(True)
         self.pin_button.setToolTip(translator.t("sensors.pin"))
@@ -376,12 +377,17 @@ class MetricCard(ThemedWidget):
 
         self.value_label = _label("—", "display")
         self.value_label.setMinimumHeight(42)
+        # Values can be compound ("2.7 / 15.6 GB"); wrap rather than hard-clip
+        # so no digit is ever lost in a narrow tile.
+        self.value_label.setWordWrap(True)
         layout.addWidget(self.value_label)
 
         self.footer = QHBoxLayout()
         self.footer.setSpacing(SPACE["sm"])
-        self.subtitle_label = _label("", "caption")
-        self.footer.addWidget(self.subtitle_label)
+        # The subtitle carries hardware names ("Simulated NVMe"), which are not
+        # predictable at build time; elide with a tooltip instead of clipping.
+        self.subtitle_label = ElidedLabel("", "caption")
+        self.footer.addWidget(self.subtitle_label, 1)
         self.footer.addStretch(1)
         self.unit_label = _label(unit, "caption")
         self.footer.addWidget(self.unit_label)
@@ -526,6 +532,7 @@ class SensorRow(QWidget):
 
         self.favorite_button = QPushButton()
         self.favorite_button.setProperty("variant", "ghost")
+        self.favorite_button.setProperty("iconOnly", "true")
         self.favorite_button.setCheckable(True)
         self.favorite_button.setChecked(favorite)
         self.favorite_button.setFixedSize(26, 26)

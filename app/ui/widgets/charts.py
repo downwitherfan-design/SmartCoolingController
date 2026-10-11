@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from app.ui.design import TYPE, Theme
 from app.ui.i18n import Translator
+from app.ui.widgets.atoms import ElidedLabel
 from app.ui.widgets.base import ThemedWidget, qcolor
 
 
@@ -77,8 +78,9 @@ class LiveChart(ThemedWidget):
         self._show_grid = True
         self._legend_visible = True
         self._legend: pg.LegendItem | None = None
+        self._lightweight = theme.lightweight
 
-        pg.setConfigOptions(antialias=True)
+        pg.setConfigOptions(antialias=not self._lightweight)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -128,6 +130,10 @@ class LiveChart(ThemedWidget):
         self._series[key] = series
         pen = pg.mkPen(qcolor(self.theme.series_color(index)), width=2)
         curve = self.plot.plot([], [], pen=pen, name=label)
+        # In lightweight mode draw only the samples inside the visible range
+        # and decimate them, so a long-running trace stays cheap to repaint.
+        curve.setClipToView(self._lightweight)
+        curve.setDownsampling(auto=self._lightweight, method="peak")
         self._curves[key] = curve
         self._data[key] = ([], [])
 
@@ -249,6 +255,15 @@ class LiveChart(ThemedWidget):
         self._tooltip.setVisible(True)
 
     def apply_theme(self) -> None:
+        # Switching performance mode rebuilds the pages, but a chart can also
+        # be restyled in place, so keep its render fidelity in sync here.
+        lightweight = self.theme.lightweight
+        if lightweight != self._lightweight:
+            self._lightweight = lightweight
+            pg.setConfigOptions(antialias=not lightweight)
+            for curve in self._curves.values():
+                curve.setClipToView(lightweight)
+                curve.setDownsampling(auto=lightweight, method="peak")
         self.plot.setBackground(qcolor(self.theme.palette.surface))
         for key, series in self._series.items():
             curve = self._curves.get(key)
@@ -296,10 +311,10 @@ class ChartPanel(ThemedWidget):
 
         header = QHBoxLayout()
         header.setSpacing(8)
-        self.title_label = QLabel(title)
-        self.title_label.setProperty("role", "heading")
-        header.addWidget(self.title_label)
-        header.addStretch(1)
+        # The title yields to the stats readout and elides when the panel is
+        # narrow, instead of hard-clipping mid-word.
+        self.title_label = ElidedLabel(title, "heading")
+        header.addWidget(self.title_label, 1)
 
         self.stats_label = QLabel("")
         self.stats_label.setProperty("role", "mono")
@@ -307,6 +322,7 @@ class ChartPanel(ThemedWidget):
 
         self.pause_button = QPushButton()
         self.pause_button.setProperty("variant", "quiet")
+        self.pause_button.setProperty("iconOnly", "true")
         self.pause_button.setCheckable(True)
         self.pause_button.setToolTip(translator.t("common.pause"))
         self.pause_button.setFixedSize(40, 26)

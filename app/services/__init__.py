@@ -17,6 +17,7 @@ Two rules shape this file:
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -54,6 +55,10 @@ _log = get_logger(__name__)
 #: Number of snapshots kept in the persistence queue before the oldest drop.
 PERSIST_QUEUE_SIZE = 4096
 
+#: Published when hardware discovery finishes on the background thread.  The
+#: payload is the :class:`~app.hardware.registry.DiscoveryResult`.
+TOPIC_DISCOVERY = "hardware.discovered"
+
 
 class ApplicationServices:
     """Owns and coordinates every application service."""
@@ -71,6 +76,8 @@ class ApplicationServices:
             self.registry,
             self.bus,
             history_size=self._history_size(),
+            rapid_rise_c_per_min=self.config.alerts.rapid_rise_c_per_min,
+            sensor_stale_after_s=self.config.telemetry.stale_after_s,
         )
 
         self.persistence: Persistence | None = None
@@ -88,6 +95,7 @@ class ApplicationServices:
             reconnect_jitter=self.config.esp32.reconnect_jitter,
             healthy_reset_s=self.config.esp32.healthy_reset_s,
             require_authentication=self.config.esp32.require_authentication,
+            stale_after_s=self.config.telemetry.stale_after_s,
         )
         self.connection.set_telemetry_supplier(self._telemetry_supplier)
 
@@ -130,6 +138,10 @@ class ApplicationServices:
         self._persist_queue: DropOldestQueue = DropOldestQueue(PERSIST_QUEUE_SIZE)
         self._simulation: SimulationBackend | None = None
         self._started = False
+
+        self._discovery_lock = threading.Lock()
+        self._discovery_thread: threading.Thread | None = None
+        self._discovery_result: object | None = None
 
         self._seed_state()
         self._register_health_probes()
@@ -190,15 +202,24 @@ class ApplicationServices:
     def persistence_error(self) -> str:
         return self._persistence_error
 
-    def start(self, *, simulate: bool = False) -> None:
-        """Bring the application up. Safe to call once."""
+    def start(self, *, simulate: bool = False, background_discovery: bool = False) -> None:
+        """Bring the application up. Safe to call once.
+
+        ``background_discovery`` runs hardware discovery on a worker thread so
+        the caller (the GUI thread in the real app) is never blocked by a slow
+        WMI/LHM ``open()``.  Discovery already finished (synchronously) is the
+        default, which keeps the headless smoke path and tests deterministic.
+        """
         if self._started:
             return
         self._started = True
 
-        self.registry.discover()
-        if simulate or self.registry.selected_backend() is BackendKind.NONE:
-            self.enable_simulation()
+        if background_discovery and not simulate:
+            self._start_background_discovery()
+        else:
+            self.registry.discover()
+            if simulate or self.registry.selected_backend() is BackendKind.NONE:
+                self.enable_simulation()
 
         if self.persistence is not None:
             self.persistence.start_writer(self._persist_queue, on_error=self._on_write_error)
@@ -220,6 +241,48 @@ class ApplicationServices:
             self.paths.mode.value,
             self.registry.selected_backend().value,
         )
+
+    def _start_background_discovery(self) -> None:
+        """Discover hardware on a daemon thread; publish when it finishes."""
+        with self._discovery_lock:
+            if self._discovery_thread is not None and self._discovery_thread.is_alive():
+                return
+            self._discovery_result = None
+            self._discovery_thread = threading.Thread(
+                target=self._discovery_worker, name="HardwareDiscovery", daemon=True
+            )
+            self._discovery_thread.start()
+
+    def _discovery_worker(self) -> None:
+        try:
+            result = self.registry.discover()
+        except Exception as exc:  # noqa: BLE001 - a failed discovery must not kill the app
+            _log.exception("hardware discovery failed")
+            self.bus.publish(TOPIC_DISCOVERY, {"error": str(exc)})
+            return
+        # Re-read the (possibly user-changed) simulate flag at completion time.
+        self._on_discovery_finished(result)
+
+    def _on_discovery_finished(self, result: object) -> None:
+        """Apply a finished discovery result and advertise it to the UI."""
+        selected = getattr(result, "selected", None)
+        if selected is BackendKind.NONE and self._simulation is None:
+            self.enable_simulation()
+        with self._discovery_lock:
+            self._discovery_result = result
+        self.bus.publish(TOPIC_DISCOVERY, result)
+
+    @property
+    def discovery_finished(self) -> bool:
+        """True once the initial (possibly background) discovery has completed."""
+        if self._simulation is not None:
+            return True
+        with self._discovery_lock:
+            return self._discovery_result is not None
+
+    @property
+    def simulation_enabled(self) -> bool:
+        return self._simulation is not None
 
     def enable_simulation(self, knobs: SimulationKnobs | None = None) -> None:
         """Switch to the simulated hardware backend (spec §29, §104)."""
@@ -310,6 +373,7 @@ class ApplicationServices:
             ("sessions", self._stop_sessions),
             ("telemetry", self.telemetry.stop),
             ("connection", self.connection.stop),
+            ("discovery", self._join_discovery),
             ("window-state", self._save_window_state),
             ("persistence", self._close_persistence),
         )
@@ -323,6 +387,20 @@ class ApplicationServices:
     def _stop_sessions(self) -> None:
         if self.sessions.recording:
             self.sessions.stop()
+
+    def _join_discovery(self) -> None:
+        """Wait (bounded) for a background discovery, then release back-ends.
+
+        Discovery is a daemon thread, so an unbounded join is unacceptable: a
+        hung backend must not stop the process from exiting.  The registry is
+        only closed once the worker is done touching it.
+        """
+        with self._discovery_lock:
+            thread = self._discovery_thread
+            self._discovery_thread = None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=3.0)
+        self.registry.close()
 
     def _close_persistence(self) -> None:
         if self.persistence is not None:
@@ -456,7 +534,16 @@ class ApplicationServices:
 
     def update_config(self, **sections) -> AppConfig:
         self.config = self.config_store.update(**sections)
+        # A few settings are read live by long-running services, so push them
+        # through rather than waiting for the next restart.
+        self.connection.set_stale_after_s(self.config.telemetry.stale_after_s)
+        self.telemetry.analyser.set_rapid_rise_threshold(
+            self.config.alerts.rapid_rise_c_per_min
+        )
+        self.telemetry.analyser.set_sensor_stale_after_s(
+            self.config.telemetry.stale_after_s
+        )
         return self.config
 
 
-__all__ = ["ApplicationServices", "PERSIST_QUEUE_SIZE"]
+__all__ = ["ApplicationServices", "PERSIST_QUEUE_SIZE", "TOPIC_DISCOVERY"]

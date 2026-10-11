@@ -17,6 +17,7 @@ sensor load never freezes the window (spec §278, §279).
 from __future__ import annotations
 
 import contextlib
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -93,30 +94,43 @@ class HardwareRegistry:
         self._profile = HardwareProfile()
         self._elevation_required = False
         self._notes: list[str] = []
+        # Discovery may run on a worker thread while the telemetry sampler reads
+        # from another; every mutation and the read snapshot go through this
+        # lock so a backend list can never be mutated mid-iteration.
+        self._lock = threading.RLock()
 
     # -- lifecycle ---------------------------------------------------------
 
     @property
     def backends(self) -> list[HardwareMonitorBackend]:
-        return list(self._backends)
+        with self._lock:
+            return list(self._backends)
 
     @property
     def profile(self) -> HardwareProfile:
-        return self._profile
+        with self._lock:
+            return self._profile
 
     @property
     def elevation_required(self) -> bool:
-        return self._elevation_required
+        with self._lock:
+            return self._elevation_required
 
     @property
     def notes(self) -> list[str]:
-        return list(self._notes)
+        with self._lock:
+            return list(self._notes)
 
     def discover(self, *, progress: Callable[[str], None] | None = None) -> DiscoveryResult:
-        """Initialise every viable back-end and take a first reading."""
+        """Initialise every viable back-end and take a first reading.
+
+        Opening the back-ends happens outside the lock (``open()`` can block for
+        a long time); the finished list is published atomically so a concurrent
+        :meth:`read` never observes a half-built registry.
+        """
         self.close()
-        self._notes.clear()
-        self._elevation_required = False
+        opened: list[HardwareMonitorBackend] = []
+        elevation_required = False
         for factory in self._factories:
             backend = factory()
             name = backend.kind.value
@@ -133,32 +147,39 @@ class HardwareRegistry:
             if backend.status in {BackendStatus.UNAVAILABLE, BackendStatus.ERROR}:
                 _log.info("backend %s unavailable: %s", name, backend.last_error)
                 if backend.kind is BackendKind.LIBRE_HARDWARE_MONITOR:
-                    self._elevation_required = True
+                    elevation_required = True
                 continue
-            self._backends.append(backend)
+            opened.append(backend)
 
+        with self._lock:
+            self._backends = opened
+            self._elevation_required = elevation_required
+            self._notes.clear()
         readings = self.read()
-        selected = self._selected_kind(readings)
-        self._merge_profile()
-        if not self._backends:
-            self._notes.append(
-                "No hardware monitoring back-end initialised; only system "
-                "information is available."
+        with self._lock:
+            selected = self._selected_kind(readings)
+            self._merge_profile()
+            if not opened:
+                self._notes.append(
+                    "No hardware monitoring back-end initialised; only system "
+                    "information is available."
+                )
+            return DiscoveryResult(
+                profile=self._profile,
+                readings=readings,
+                selected=selected,
+                health=self.health(),
+                elevation_required=self._elevation_required,
+                notes=list(self._notes),
             )
-        return DiscoveryResult(
-            profile=self._profile,
-            readings=readings,
-            selected=selected,
-            health=self.health(),
-            elevation_required=self._elevation_required,
-            notes=list(self._notes),
-        )
 
     def close(self) -> None:
-        for backend in self._backends:
+        with self._lock:
+            backends = self._backends
+            self._backends = []
+        for backend in backends:
             with contextlib.suppress(Exception):
                 backend.close()
-        self._backends.clear()
 
     # -- data --------------------------------------------------------------
 
@@ -168,8 +189,11 @@ class HardwareRegistry:
         Higher priority back-ends come first in the list, so on a collision the
         first reading wins — which is exactly the priority order we want.
         """
+        with self._lock:
+            backends = list(self._backends)
+            simulation = self._simulation
         merged: dict[str, SensorReading] = {}
-        for backend in self._backends:
+        for backend in backends:
             try:
                 readings = backend.read()
             except Exception as exc:
@@ -177,13 +201,14 @@ class HardwareRegistry:
                 continue
             for reading in readings:
                 merged.setdefault(reading.sensor_id, reading)
-        if self._simulation is not None:
-            for reading in self._simulation.read():
+        if simulation is not None:
+            for reading in simulation.read():
                 merged.setdefault(reading.sensor_id, reading)
         return list(merged.values())
 
     def set_simulation(self, backend: HardwareMonitorBackend | None) -> None:
-        self._simulation = backend
+        with self._lock:
+            self._simulation = backend
 
     # -- diagnostics -------------------------------------------------------
 
@@ -191,21 +216,26 @@ class HardwareRegistry:
         # Precedence: an explicit Simulation Mode override wins (the user asked
         # for it, spec §29/§104); then any real sensor back-end; the uptime-only
         # Windows API helper is always the last resort (spec §28).
-        if self._simulation is not None:
-            return BackendKind.SIMULATION
-        for backend in self._backends:
+        with self._lock:
+            if self._simulation is not None:
+                return BackendKind.SIMULATION
+            backends = list(self._backends)
+        for backend in backends:
             if backend.status in {BackendStatus.READY, BackendStatus.DEGRADED} and (
                 backend.kind is not BackendKind.WINDOWS_API
             ):
                 return backend.kind
-        for backend in self._backends:
+        for backend in backends:
             if backend.status in {BackendStatus.READY, BackendStatus.DEGRADED}:
                 return backend.kind
         return BackendKind.NONE
 
     def health(self) -> list[BackendHealth]:
+        with self._lock:
+            backends = list(self._backends)
+            simulation = self._simulation
         report: list[BackendHealth] = []
-        for backend in self._backends:
+        for backend in backends:
             report.append(
                 BackendHealth(
                     kind=backend.kind,
@@ -216,12 +246,12 @@ class HardwareRegistry:
                     last_success=backend.last_success,
                 )
             )
-        if self._simulation is not None:
+        if simulation is not None:
             report.append(
                 BackendHealth(
                     kind=BackendKind.SIMULATION,
-                    status=self._simulation.status,
-                    read_count=self._simulation.read_count,
+                    status=simulation.status,
+                    read_count=simulation.read_count,
                 )
             )
         return report
