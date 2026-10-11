@@ -32,15 +32,16 @@ if str(ROOT) not in sys.path:
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app.core.enums import Language  # noqa: E402
-from app.ui.layout_check import find_layout_problems  # noqa: E402
+from app.ui.layout_check import find_layout_problems, find_painted_text_problems  # noqa: E402
 from app.ui.shell import PAGE_CLASSES, MainWindow  # noqa: E402
 
-SIZES = [(1280, 800), (1440, 900), (1600, 1000), (1024, 700)]
+#: The owner's screenshot was 1648x920; the rest span the common desktop range.
+SIZES = [(1648, 920), (1280, 800), (1440, 900), (1600, 1000), (1024, 700)]
 LANGUAGES = [Language.ENGLISH, Language.PERSIAN]
 
 
 def audit_page(page) -> list[str]:
-    return find_layout_problems(page.content)
+    return find_layout_problems(page.content) + find_painted_text_problems(page.content)
 
 
 def _services(data_dir: Path):

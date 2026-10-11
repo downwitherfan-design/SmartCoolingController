@@ -16,6 +16,8 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (
     QColor,
     QConicalGradient,
+    QFont,
+    QFontMetricsF,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -168,6 +170,87 @@ def draw_gradient_arc(
     painter.restore()
 
 
+#: Width/height a fitted text run may never exceed, relative to its box.  The
+#: last-resort elide can still leave a hair of ink over the edge, and Qt's
+#: metrics round by a pixel.
+FIT_TOL = 2
+
+
+def fit_text(
+    painter: QPainter,
+    text: str,
+    rect: QRectF,
+    flags: Qt.AlignmentFlag | int = Qt.AlignmentFlag.AlignCenter,
+    *,
+    min_scale: float = 0.62,
+    wrap: bool = False,
+) -> tuple[str, Qt.AlignmentFlag | int, QFont]:
+    """Shrink then elide ``text`` so it is actually drawn inside ``rect``.
+
+    Custom-painted widgets used to size their boxes with magic pixel heights and
+    hard-coded point sizes, so a long label or a non-Latin string was painted
+    straight over the widget edge — invisible to any QLabel-based layout check.
+    This fits the *real* font metrics to the *real* box:
+
+    1. shrink the point size, down to ``min_scale`` of the base size;
+    2. if it still does not fit, elide horizontally;
+    3. return the (possibly modified) text, flags and the font to use.
+
+    The caller must ``painter.setFont(font)`` before drawing.  This is the single
+    definition of "fitted text" shared by every custom painter, so a new one
+    cannot reintroduce the defect.
+    """
+    base = QFont(painter.font())
+    size = base.pointSizeF()
+    if size <= 0:  # font specified in pixels
+        size = float(base.pixelSize())
+    floor = max(1.0, size * min_scale)
+    flags = int(flags)
+    if wrap:
+        flags |= int(Qt.TextFlag.TextWordWrap)
+    width = int(rect.width())
+    height = int(rect.height())
+
+    font = QFont(base)
+    while True:
+        metrics = QFontMetricsF(font)
+        bounds = metrics.boundingRect(
+            QRectF(0, 0, width, height), Qt.TextFlag(flags), text
+        )
+        if bounds.width() <= width + FIT_TOL and bounds.height() <= height + FIT_TOL:
+            break
+        if font.pointSizeF() > floor:
+            font.setPointSizeF(max(floor, font.pointSizeF() - 0.5))
+            continue
+        if not wrap:
+            available = max(8, width - 2)
+            elided = metrics.elidedText(text, Qt.TextElideMode.ElideRight, available)
+            if elided != text:
+                text = elided
+                continue
+        break
+    return text, Qt.AlignmentFlag(flags), font
+
+
+def draw_fitted_text(
+    painter: QPainter,
+    text: str,
+    rect: QRectF,
+    flags: Qt.AlignmentFlag | int = Qt.AlignmentFlag.AlignCenter,
+    *,
+    min_scale: float = 0.62,
+    wrap: bool = False,
+) -> None:
+    """Fit ``text`` to ``rect`` and draw it, restoring the painter's font after."""
+    fitted, fitted_flags, font = fit_text(
+        painter, text, rect, flags, min_scale=min_scale, wrap=wrap
+    )
+    painter.save()
+    painter.setFont(font)
+    painter.drawText(rect, fitted_flags, fitted)
+    painter.restore()
+
+
 def rounded_path(rect: QRectF, radius: float) -> QPainterPath:
     path = QPainterPath()
     path.addRoundedRect(rect, radius, radius)
@@ -206,11 +289,14 @@ class ElidedLabel(QLabel):
 
 __all__ = [
     "ElidedLabel",
+    "FIT_TOL",
     "ThemedFrame",
     "ThemedWidget",
     "add_shadow",
     "draw_arc_track",
+    "draw_fitted_text",
     "draw_glow",
+    "fit_text",
     "draw_gradient_arc",
     "paint_icon",
     "qcolor",

@@ -301,6 +301,16 @@ use it. Run the gate off-screen before shipping UI changes:
 QT_QPA_PLATFORM=offscreen python scripts/diagnostics/gui_audit.py   # exits non-zero on defects
 ```
 
+**Custom-painted text is covered too.** `find_layout_problems` only sees QLabel
+geometry, so a gauge, the schematic or the fan could paint text straight over
+their own edge unnoticed. `find_painted_text_problems` renders the widget
+through a `QPainter` subclass that records every `drawText` whose ink or wrapped
+height exceeds its box; the audit calls both. Never size painted text with magic
+pixel rects — use `app/ui/widgets/base.py::draw_fitted_text`, which shrinks to
+`min_scale` then elides, and keeps the run inside its box in every language.
+`tests/ui/test_painted_text.py` fails if a widget overflows, and includes a
+self-check that the detector actually bites.
+
 ## GitHub push credential
 
 The owner's `GITHUB_TOKEN` env var is read-only for this repo (fine-grained,

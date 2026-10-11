@@ -23,7 +23,7 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 from app.core.enums import ConnectionState, FanState
 from app.ui.design import TYPE, Theme
 from app.ui.i18n import Translator
-from app.ui.widgets.base import ThemedWidget, draw_glow, paint_icon
+from app.ui.widgets.base import ThemedWidget, draw_fitted_text, draw_glow, paint_icon
 
 
 class _Node:
@@ -252,10 +252,11 @@ class Schematic(ThemedWidget):
             painter.setFont(font)
             label_color = QColor(self.theme.palette.text_faint)
             painter.setPen(label_color)
-            painter.drawText(
-                QRectF(mid.x() - 40, mid.y() - 18, 80, 16),
-                Qt.AlignmentFlag.AlignCenter,
+            draw_fitted_text(
+                painter,
                 self._link_label(link.label),
+                QRectF(mid.x() - 48, mid.y() - 18, 96, 16),
+                Qt.AlignmentFlag.AlignCenter,
             )
 
     def _link_label(self, label: str) -> str:
@@ -323,28 +324,31 @@ class Schematic(ThemedWidget):
         title_font = QFont(self.font())
         title_font.setPointSizeF(TYPE["subheading"])
         title_font.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(title_font)
         painter.setPen(QColor(self.theme.palette.text))
+        painter.setFont(title_font)
         title_key = f"field.{key.lower()}"
         title = self.tr_.t(title_key)
         if title == title_key:
             title = node.label
-        painter.drawText(
+        draw_fitted_text(
+            painter,
+            title,
             QRectF(rect.left() + 56, rect.top() + 14, rect.width() - 68, 24),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            title,
         )
 
         subtitle = self._node_subtitle(key)
         if subtitle:
             sub_font = QFont(self.font())
             sub_font.setPointSizeF(TYPE["caption"])
-            painter.setFont(sub_font)
             painter.setPen(QColor(self.theme.palette.text_muted))
-            painter.drawText(
+            painter.setFont(sub_font)
+            draw_fitted_text(
+                painter,
+                subtitle,
                 QRectF(rect.left() + 56, rect.top() + 38, rect.width() - 68, rect.height() - 46),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-                subtitle,
+                wrap=True,
             )
 
     def _node_subtitle(self, key: str) -> str:

@@ -13,7 +13,7 @@ Accessibility notes (spec §130):
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QFrame,
@@ -35,7 +35,7 @@ from app.models.sensors import SensorDescriptor
 from app.ui.design import SPACE, TYPE, Theme
 from app.ui.i18n import Translator
 from app.ui.icons import make_icon, paint_icon
-from app.ui.widgets.base import ThemedWidget
+from app.ui.widgets.base import ThemedWidget, draw_fitted_text
 
 
 def _label(text: str, role: str = "body", parent: QWidget | None = None) -> QLabel:
@@ -220,10 +220,11 @@ class StatusBadge(ThemedWidget):
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
         painter.setPen(color)
-        painter.drawText(
-            rect.adjusted(text_x - rect.left(), 0, -10, 0),
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+        draw_fitted_text(
+            painter,
             self._text,
+            QRectF(rect.adjusted(text_x - rect.left(), 0, -10, 0)),
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
         )
         painter.end()
 

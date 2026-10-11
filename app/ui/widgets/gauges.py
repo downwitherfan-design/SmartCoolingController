@@ -23,7 +23,7 @@ from app.core.enums import MetricState, ThermalState, ThermalTrend
 from app.core.units import format_rate
 from app.ui.design import TYPE, Theme
 from app.ui.i18n import Translator
-from app.ui.widgets.base import ThemedWidget, draw_arc_track, draw_glow
+from app.ui.widgets.base import ThemedWidget, draw_arc_track, draw_fitted_text, draw_glow
 
 
 class _ValueAnimator:
@@ -206,48 +206,53 @@ class _ArcGauge(ThemedWidget):
     def _paint_center(self, painter: QPainter, rect: QRectF, color: QColor) -> None:
         center = rect.center()
         current = self._animator.current
+        # Boxes are generous and overlap slightly; the fitting step keeps every
+        # run inside its box, so a longer value or a translated label can never
+        # spill over the arc the way the old magic-number rects allowed.
+        left = rect.left() - 4
+        width = rect.width() + 8
 
         value_font = QFont(self.font())
         value_font.setPointSizeF(TYPE["display"] + 2)
         value_font.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(value_font)
         painter.setPen(QColor(self.theme.palette.text))
+        painter.setFont(value_font)
         text = self._format_value(current)
-        value_rect = QRectF(rect.left(), center.y() - rect.height() * 0.20, rect.width(), rect.height() * 0.24)
-        painter.drawText(value_rect, Qt.AlignmentFlag.AlignCenter, text)
+        value_rect = QRectF(left, center.y() - rect.height() * 0.26, width, rect.height() * 0.36)
+        draw_fitted_text(painter, text, value_rect, Qt.AlignmentFlag.AlignCenter)
 
         unit_font = QFont(self.font())
         unit_font.setPointSizeF(TYPE["small"])
-        painter.setFont(unit_font)
         painter.setPen(QColor(self.theme.palette.text_muted))
-        unit_rect = QRectF(rect.left(), center.y() + rect.height() * 0.045, rect.width(), 20)
-        painter.drawText(unit_rect, Qt.AlignmentFlag.AlignCenter, self._unit)
+        painter.setFont(unit_font)
+        unit_rect = QRectF(left, center.y() + rect.height() * 0.03, width, 18)
+        draw_fitted_text(painter, self._unit, unit_rect, Qt.AlignmentFlag.AlignCenter)
 
         if self._state_text:
             state_font = QFont(self.font())
             state_font.setPointSizeF(TYPE["caption"])
             state_font.setWeight(QFont.Weight.DemiBold)
-            painter.setFont(state_font)
             painter.setPen(color)
-            state_rect = QRectF(rect.left(), center.y() + rect.height() * 0.155, rect.width(), 18)
-            painter.drawText(state_rect, Qt.AlignmentFlag.AlignCenter, self._state_text)
+            painter.setFont(state_font)
+            state_rect = QRectF(left, center.y() + rect.height() * 0.135, width, 18)
+            draw_fitted_text(painter, self._state_text, state_rect, Qt.AlignmentFlag.AlignCenter)
 
         if self._sublabel:
             sub_font = QFont(self.font())
             sub_font.setPointSizeF(TYPE["caption"])
-            painter.setFont(sub_font)
             painter.setPen(QColor(self.theme.palette.text_faint))
-            sub_rect = QRectF(rect.left(), rect.bottom() + 2, rect.width(), self.BAND)
-            painter.drawText(sub_rect, Qt.AlignmentFlag.AlignCenter, self._sublabel)
+            painter.setFont(sub_font)
+            sub_rect = QRectF(left, rect.bottom() + 2, width, self.BAND)
+            draw_fitted_text(painter, self._sublabel, sub_rect, Qt.AlignmentFlag.AlignCenter)
 
         if self._label:
             label_font = QFont(self.font())
             label_font.setPointSizeF(TYPE["caption"])
             label_font.setWeight(QFont.Weight.DemiBold)
-            painter.setFont(label_font)
             painter.setPen(QColor(self.theme.palette.text_muted))
-            label_rect = QRectF(rect.left(), rect.top() - self.BAND, rect.width(), self.BAND)
-            painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, self._label.upper())
+            painter.setFont(label_font)
+            label_rect = QRectF(left, rect.top() - self.BAND, width, self.BAND)
+            draw_fitted_text(painter, self._label.upper(), label_rect, Qt.AlignmentFlag.AlignCenter)
 
     def _fraction(self, value: float) -> float:
         span = (self._max - self._min) or 1.0
@@ -403,35 +408,38 @@ class PowerMetric(ThemedWidget):
         label_font = QFont(self.font())
         label_font.setPointSizeF(TYPE["caption"])
         label_font.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(label_font)
         painter.setPen(QColor(self.theme.palette.text_faint))
-        painter.drawText(
+        painter.setFont(label_font)
+        draw_fitted_text(
+            painter,
+            self._label.upper(),
             QRectF(rect.left(), rect.top(), rect.width(), 18),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            self._label.upper(),
         )
 
         value_font = QFont(self.font())
         value_font.setPointSizeF(TYPE["heading"] + 1)
         value_font.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(value_font)
         painter.setPen(self.color(self._tone))
+        painter.setFont(value_font)
         value = self._animator.current
         text = "—" if value is None else self.tr_.number(value, decimals=1)
-        painter.drawText(
+        draw_fitted_text(
+            painter,
+            text,
             QRectF(rect.left(), rect.top() + 16, rect.width() - 30, rect.height() - 16),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            text,
         )
 
         unit_font = QFont(self.font())
         unit_font.setPointSizeF(TYPE["caption"])
-        painter.setFont(unit_font)
         painter.setPen(QColor(self.theme.palette.text_muted))
-        painter.drawText(
+        painter.setFont(unit_font)
+        draw_fitted_text(
+            painter,
+            self._unit,
             QRectF(rect.right() - 34, rect.top() + 16, 34, rect.height() - 16),
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            self._unit,
         )
         painter.end()
 
@@ -471,24 +479,26 @@ class ThermalTrendStrip(ThemedWidget):
 
             name_font = QFont(self.font())
             name_font.setPointSizeF(TYPE["caption"])
-            painter.setFont(name_font)
             painter.setPen(QColor(self.theme.palette.text_faint))
-            painter.drawText(
+            painter.setFont(name_font)
+            draw_fitted_text(
+                painter,
+                name.upper(),
                 QRectF(left + 4, 2, cell - 8, 16),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                name.upper(),
             )
 
             value_font = QFont(self.font())
             value_font.setPointSizeF(TYPE["subheading"])
             value_font.setWeight(QFont.Weight.DemiBold)
-            painter.setFont(value_font)
             painter.setPen(color)
+            painter.setFont(value_font)
             text = arrow if rate is None else f"{arrow} {format_rate(rate)}"
-            painter.drawText(
+            draw_fitted_text(
+                painter,
+                text,
                 QRectF(left + 4, 18, cell - 8, self.height() - 20),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                text,
             )
 
             if index < count - 1:

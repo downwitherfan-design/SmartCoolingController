@@ -9,12 +9,22 @@ a compound value, two cards drawn on top of each other.
 built widget tree and reports those defects as human-readable strings.  It is
 used by the head-less GUI audit (``scripts/diagnostics/gui_audit.py``) and by
 the UI test-suite, so both share one definition of "correctly laid out".
+
+:func:`find_painted_text_problems` covers what QLabel geometry cannot see:
+gauges, the schematic and the fan paint their own text, so it renders a widget
+through a recording painter and reports every run that overflows its box.  The
+audit runs both.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QScrollArea, QWidget
+import importlib
+import pkgutil
+from types import ModuleType
+
+from PySide6.QtCore import QPoint, QRectF, Qt
+from PySide6.QtGui import QImage, QPainter
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QWidget
 
 from app.ui.widgets.atoms import ElidedLabel
 
@@ -102,3 +112,103 @@ def _geometry_problems(root: QWidget) -> list[str]:
 def find_layout_problems(root: QWidget) -> list[str]:
     """Return every painted-geometry defect found under ``root``."""
     return _clipped_labels(root) + _geometry_problems(root)
+
+
+#: Shared sink the recording painter appends to during one audit render.  A
+#: widget's ``paintEvent`` builds its *own* ``QPainter(self)``, so the findings
+#: cannot live on a single instance — every recording painter created while an
+#: audit is active must report into the same list.
+_ACTIVE_FINDINGS: list[str] | None = None
+
+
+class _TextRecordingPainter(QPainter):
+    """A QPainter that records ``drawText`` runs that overflow their rectangle.
+
+    QLabel checks cannot see text drawn inside a ``paintEvent`` — gauges, the
+    schematic and the fan all paint their own labels — which is exactly where the
+    reported clipping lived.  Rendering a widget while this class is installed
+    captures every run with the *real* font metrics and box, so overflow becomes
+    measurable and can gate CI.
+    """
+
+    def drawText(self, *args) -> None:  # type: ignore[override]
+        sink = _ACTIVE_FINDINGS
+        try:
+            if sink is not None and args and isinstance(args[0], QRectF):
+                rect = args[0]
+                flags = int(args[1]) if len(args) > 1 else 0
+                text = str(args[2]) if len(args) > 2 else ""
+                metrics = self.fontMetrics()
+                wrapped = bool(flags & int(Qt.TextFlag.TextWordWrap))
+                if wrapped:
+                    needed = metrics.boundingRect(
+                        0, 0, int(rect.width()), 100000, flags, text
+                    ).height()
+                    if needed > rect.height() + _SLACK:
+                        sink.append(
+                            f"painted-text overflow {text[:32]!r}: wrapped needs "
+                            f"{needed}px, box {int(rect.height())}px"
+                        )
+                else:
+                    ink = metrics.tightBoundingRect(text)
+                    if ink.width() > rect.width() + _SLACK or ink.height() > rect.height() + _SLACK:
+                        sink.append(
+                            f"painted-text overflow {text[:32]!r}: ink "
+                            f"{ink.width()}x{ink.height()}px, box "
+                            f"{int(rect.width())}x{int(rect.height())}px"
+                        )
+        except (TypeError, ValueError):  # never let the audit crash the render
+            pass
+        super().drawText(*args)
+
+
+#: Modules whose custom painters are patched during an audit.  Imported lazily so
+#: this module stays importable without a QApplication.
+_PAINT_MODULES = (
+    "app.ui.widgets.gauges",
+    "app.ui.widgets.fan",
+    "app.ui.widgets.schematic",
+    "app.ui.widgets.curve",
+    "app.ui.widgets.atoms",
+    "app.ui.widgets.forms",
+    "app.ui.widgets.base",
+)
+
+
+def _iter_widget_modules() -> list[ModuleType]:
+    import app.ui.widgets as package
+
+    modules = [importlib.import_module(name) for name in _PAINT_MODULES]
+    for info in pkgutil.iter_modules(package.__path__):
+        module = importlib.import_module(f"{package.__name__}.{info.name}")
+        if module not in modules:
+            modules.append(module)
+    return modules
+
+
+def find_painted_text_problems(widget: QWidget) -> list[str]:
+    """Render ``widget`` and report custom-painted text that escapes its box."""
+    global _ACTIVE_FINDINGS
+    if QApplication.instance() is None:
+        return []
+    width = max(1, widget.width())
+    height = max(1, widget.height())
+    image = QImage(width, height, QImage.Format.Format_ARGB32)
+    findings: list[str] = []
+    patches: list[tuple[ModuleType, object]] = []
+    for module in _iter_widget_modules():
+        if not hasattr(module, "QPainter"):
+            continue
+        patches.append((module, module.QPainter))  # type: ignore[attr-defined]
+        module.QPainter = _TextRecordingPainter  # type: ignore[attr-defined]
+    previous = _ACTIVE_FINDINGS
+    _ACTIVE_FINDINGS = findings
+    try:
+        painter = _TextRecordingPainter(image)
+        widget.render(painter, QPoint(0, 0))
+        painter.end()
+    finally:
+        _ACTIVE_FINDINGS = previous
+        for module, original in patches:
+            module.QPainter = original  # type: ignore[attr-defined]
+    return findings

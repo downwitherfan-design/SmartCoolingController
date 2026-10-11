@@ -78,6 +78,35 @@ a 500-event worker burst collapses to one pending display event and renders only
 the newest; 50 alert events are all delivered. Mutation: disabling coalescing
 fails 3 tests.
 
+## Phase 6 — GUI correctness in custom-painted widgets
+
+The owner's screenshots showed clipping that the geometry audit reported as
+"no layout defects found", because `find_layout_problems` only inspects QLabel
+geometry. Rendering the pages through a `QPainter` subclass that records
+`drawText` found the real defects immediately:
+
+| Widget | Run | Box | Needed |
+|--------|-----|-----|--------|
+| `TemperatureGauge` | value `42` | 112x26 | 62x36 (vertically clipped) |
+| `TemperatureGauge` | `Normal · Simulated` | 112x18 | 162x12 |
+| `Schematic` | `4-Wire Fan` | 102x24 | 115x15 |
+| `Schematic` | `فن چهارسیمه` (fa) | 102x24 | 133x19 |
+| `Schematic` | `RPM Unavailable` | 102x46 | 125x12 |
+| `FanVisualizer` | `دور بر دقیقه` (fa) | 47x14 | 68x12 |
+
+Fix: `base.py::fit_text` / `draw_fitted_text` (shrink to `min_scale`, then
+elide) now backs every boxed run in `gauges.py`, `fan.py`, `schematic.py` and
+`atoms.py`; magic pixel rects were replaced with real geometry. The fan readout
+now splits each row into a label half and a value half so a long label cannot
+paint under a right-aligned value.
+
+Detection: `layout_check.py::find_painted_text_problems` renders a widget
+through the recording painter; `gui_audit.py` runs it alongside the geometry
+check at five sizes (including the 1648x920 screenshot size) × two languages ×
+every page — **0 defects**. `tests/ui/test_painted_text.py` pins each custom
+widget and includes a deliberate-overflow self-check that fails if the detector
+stops biting. AD-4 records the decision.
+
 ## Quality gates (as of `9910c8a`)
 
 - `ruff check app run.py tests scripts` → pass
@@ -89,6 +118,5 @@ fails 3 tests.
 - Phase 3: audit remaining GUI callbacks (history range change, diagnostics,
   support-bundle zip, network discovery) for blocking I/O.
 - Phase 5: profile chart render under a full buffer and hidden-chart repaint.
-- Phase 6: reproduce the ESP32 Link / Dashboard clipping with real screenshots.
 - Phase 8: memory/CPU/startup and package cost.
 - Phase 9: long soak run.

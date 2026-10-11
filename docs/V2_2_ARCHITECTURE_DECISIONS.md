@@ -29,6 +29,33 @@ decision.
 Invariant protected: GUI display work is bounded during congestion while the
 newest visual state is still rendered; critical events are never lost.
 
+## AD-4 — One fitted-text primitive for every custom painter; the GUI gate renders text
+
+Custom-painted widgets (`gauges.py`, `fan.py`, `schematic.py`, `atoms.py`) sized
+their text with magic pixel rectangles and hard-coded point sizes. The layout
+checker only inspected QLabel geometry, so the defects it could not see were
+exactly the ones the owner saw: the gauge's big number was vertically clipped
+(36 px of ink in a 26 px box), the trend sublabel `Normal · Simulated` needed
+162 px in a 112 px box, and the schematic node titles/subtitles clipped in both
+English and Persian (`فن چهارسیمه` needs 133 px in a 102 px box).
+
+Decision: a single `app/ui/widgets/base.py::fit_text` / `draw_fitted_text`
+defines "fitted text" — shrink the point size to `min_scale` (0.62) of the base,
+then elide horizontally; wrapping runs are fitted by height. Every custom
+painter calls it instead of `painter.drawText` for boxed text, and every box is
+sized from the widget's real geometry rather than a magic constant.
+
+Enforcement: `layout_check.py::find_painted_text_problems` renders a widget
+through a `QPainter` subclass that records each `drawText` whose ink (or wrapped
+height) exceeds its rectangle. The head-less `gui_audit.py` runs both the
+geometry and the painted-text checks at five sizes × two languages × every page,
+and `tests/ui/test_painted_text.py` pins each widget plus a self-check that the
+detector actually bites.
+
+Invariant protected: no text a custom painter draws can escape its box, in any
+language, because the box and the metrics are compared by the same code that
+draws it — not by a human reading a screenshot.
+
 ## AD-1 — Preserve the lossless/critical event path when coalescing display snapshots
 
 Status: superseded by AD-3 (implemented).
