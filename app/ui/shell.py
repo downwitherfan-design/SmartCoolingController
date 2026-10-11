@@ -310,7 +310,11 @@ class MainWindow(QMainWindow):
                 TOPIC_SESSIONS,
                 TOPIC_MODE,
                 TOPIC_DISCOVERY,
-            }
+            },
+            # Only the visual snapshot may coalesce: it is pure display state and
+            # a newer one fully supersedes an older one.  Alerts, connection
+            # state, sessions and health are never dropped (see AD-3).
+            coalesce={TOPIC_SNAPSHOT},
         )
         self._bridge.received.connect(self._on_bus_event)
         # If discovery is still running (started in the background), show an

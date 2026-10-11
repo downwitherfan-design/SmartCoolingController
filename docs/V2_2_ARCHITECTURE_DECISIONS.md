@@ -3,9 +3,35 @@
 Short, dated records of decisions that shape the performance work. Each entry
 states the decision, the evidence, and the invariant it protects.
 
+## AD-3 — Coalesce display snapshots in the Qt bridge; never coalesce control/alert state
+
+Status: implemented and tested (`app/application/qt_bridge.py`,
+`tests/ui/test_qt_bridge.py`).
+
+`QtEventBridge` re-emits every attached bus event as a queued Qt signal. When the
+GUI thread is busy — a slow page paint, a range change, a resize — a run of
+`telemetry.snapshot` events piles up in Qt's event queue and each is rendered in
+turn afterwards, showing obsolete frames.
+
+Decision: `attach(..., coalesce={TOPIC_SNAPSHOT})`. For a coalescing topic the
+bridge keeps only the newest event in a one-slot-per-topic map and schedules a
+single drain on the GUI thread. Delivery stays on the GUI thread, and at most one
+drain callback is ever queued. Non-coalescing topics keep the existing lossless
+synchronous path.
+
+What is **not** coalesced (lossless): `TOPIC_ALERT`, `TOPIC_ALERT_CLEARED`,
+`TOPIC_NOTIFY`, `TOPIC_HEALTH`, `TOPIC_CONNECTION`, `TOPIC_SESSIONS`,
+`TOPIC_MODE`, `TOPIC_DISCOVERY`. The service layer consumes the same snapshots
+directly from the bus (cooling control, alerts, persistence) before the bridge
+ever sees them, so display coalescing cannot drop a control or persistence
+decision.
+
+Invariant protected: GUI display work is bounded during congestion while the
+newest visual state is still rendered; critical events are never lost.
+
 ## AD-1 — Preserve the lossless/critical event path when coalescing display snapshots
 
-Status: decided (implementation pending measurement).
+Status: superseded by AD-3 (implemented).
 
 The telemetry sampler publishes `telemetry.snapshot` at the sample interval.
 The Qt bridge re-emits each event as one queued Qt signal. If the GUI thread is
