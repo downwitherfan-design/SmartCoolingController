@@ -83,12 +83,15 @@ class NavigationRail(ThemedWidget):
         brand_text.setSpacing(0)
         self.brand_title = QLabel()
         self.brand_title.setProperty("role", "subheading")
+        # The rail is a fixed narrow column; the product name and tagline are
+        # long enough to be clipped by a single-line QLabel, so let them wrap.
+        self.brand_title.setWordWrap(True)
         brand_text.addWidget(self.brand_title)
         self.brand_sub = QLabel()
         self.brand_sub.setProperty("role", "caption")
+        self.brand_sub.setWordWrap(True)
         brand_text.addWidget(self.brand_sub)
-        brand_layout.addLayout(brand_text)
-        brand_layout.addStretch(1)
+        brand_layout.addLayout(brand_text, 1)
         layout.addWidget(self.brand)
 
         for section_key, entries in self.SECTIONS:

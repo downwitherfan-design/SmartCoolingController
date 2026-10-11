@@ -128,10 +128,12 @@ class SectionHeader(QWidget):
         self.subtitle.setMinimumWidth(1)
         self.subtitle.setVisible(bool(subtitle))
         text_col.addWidget(self.subtitle)
-        layout.addLayout(text_col)
-        layout.addStretch(1)
+        # The text column must own the row's spare width: a trailing
+        # ``addStretch`` used to swallow it, leaving the title a few dozen
+        # pixels inside a wide card and forcing it to wrap or clip.
+        layout.addLayout(text_col, 1)
         if trailing is not None:
-            layout.addWidget(trailing)
+            layout.addWidget(trailing, 0)
 
     def set_text(self, title: str, subtitle: str = "") -> None:
         self.title.setText(title)
@@ -452,8 +454,11 @@ class KeyValueRow(QWidget):
         layout.setContentsMargins(0, 3, 0, 3)
         layout.setSpacing(SPACE["md"])
         self.key_label = _label(key, "muted")
-        self.key_label.setMinimumWidth(120)
-        layout.addWidget(self.key_label)
+        # Let the key take its natural width; a fixed 120px floor used to clip
+        # longer keys ("Consecutive failures", "Database path").  The stretch
+        # keeps the value right-aligned without squeezing the key.
+        self.key_label.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.key_label, 0)
         layout.addStretch(1)
         self.value_label = ElidedLabel(value, "mono" if mono else "body")
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)

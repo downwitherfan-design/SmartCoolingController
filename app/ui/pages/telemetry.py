@@ -23,12 +23,12 @@ from PySide6.QtWidgets import (
 from app.core.enums import MetricState
 from app.models.telemetry import TelemetrySnapshot
 from app.ui.design import SPACE
-from app.ui.pages.base import Page
+from app.ui.pages.base import ScrollPage
 from app.ui.widgets.atoms import Card, SectionHeader, StatusBadge
 from app.ui.widgets.base import qcolor
 
 
-class TelemetryPage(Page):
+class TelemetryPage(ScrollPage):
     key = "telemetry"
     title_key = "telemetry.title"
     subtitle_key = "telemetry.subtitle"
@@ -36,10 +36,8 @@ class TelemetryPage(Page):
 
     COLUMNS = ("common.name", "common.value", "common.unit", "common.state", "common.source")
 
-    def _build_content(self, content) -> None:
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(SPACE["xl"], SPACE["lg"], SPACE["xl"], SPACE["xl"])
-        layout.setSpacing(SPACE["lg"])
+    def build_body(self) -> None:
+        layout = self.body
 
         header = QHBoxLayout()
         header.addWidget(SectionHeader(self.tr_.t("telemetry.title"), self.tr_.t("telemetry.subtitle")), 1)

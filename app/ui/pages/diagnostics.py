@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 from app.models.telemetry import TelemetrySnapshot
 from app.services.health import HealthStatus
 from app.ui.design import SPACE
-from app.ui.pages.base import Page
+from app.ui.pages.base import ScrollPage
 from app.ui.widgets.atoms import Card, KeyValueRow, SectionHeader, StatusBadge
 
 TOPIC_HEALTH = "health.updated"
@@ -38,16 +38,14 @@ TOPIC_HEALTH = "health.updated"
 _HEALTH_KEYS = ("cpu", "gpu", "fan", "esp32", "sensors", "database", "application")
 
 
-class DiagnosticsPage(Page):
+class DiagnosticsPage(ScrollPage):
     key = "diagnostics"
     title_key = "diagnostics.title"
     subtitle_key = "diagnostics.subtitle"
     icon_name = "diagnostics"
 
-    def _build_content(self, content: QWidget) -> None:
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(SPACE["xl"], SPACE["lg"], SPACE["xl"], SPACE["xl"])
-        layout.setSpacing(SPACE["lg"])
+    def build_body(self) -> None:
+        layout = self.body
 
         layout.addWidget(SectionHeader(self.tr_.t("diagnostics.title"), self.tr_.t("diagnostics.subtitle")))
 

@@ -22,27 +22,24 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
-    QWidget,
 )
 
 from app.core.enums import SessionState
 from app.models.telemetry import TelemetrySnapshot
 from app.ui.design import SPACE
-from app.ui.pages.base import Page
+from app.ui.pages.base import ScrollPage
 from app.ui.widgets.atoms import Card, EmptyState, KeyValueRow, SectionHeader, StatusBadge
 from app.ui.widgets.base import qcolor
 
 
-class SessionsPage(Page):
+class SessionsPage(ScrollPage):
     key = "sessions"
     title_key = "sessions.title"
     subtitle_key = "sessions.subtitle"
     icon_name = "sessions"
 
-    def _build_content(self, content: QWidget) -> None:
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(SPACE["xl"], SPACE["lg"], SPACE["xl"], SPACE["xl"])
-        layout.setSpacing(SPACE["lg"])
+    def build_body(self) -> None:
+        layout = self.body
 
         top = QHBoxLayout()
         top.setSpacing(SPACE["lg"])

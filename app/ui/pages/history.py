@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout
 
 from app.models.telemetry import TelemetrySnapshot
 from app.ui.design import SPACE
-from app.ui.pages.base import Page
+from app.ui.pages.base import ScrollPage
 from app.ui.widgets.atoms import (
     Card,
     EmptyState,
@@ -52,17 +52,15 @@ DEFAULT_RANGE = "h1"
 MAX_ROWS = 20_000
 
 
-class HistoryPage(Page):
+class HistoryPage(ScrollPage):
     key = "history"
     title_key = "history.title"
     subtitle_key = "history.subtitle"
     icon_name = "history"
     wants_snapshots = False
 
-    def _build_content(self, content: QWidget) -> None:
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(SPACE["xl"], SPACE["lg"], SPACE["xl"], SPACE["xl"])
-        layout.setSpacing(SPACE["lg"])
+    def build_body(self) -> None:
+        layout = self.body
 
         header = QHBoxLayout()
         header.addWidget(SectionHeader(self.tr_.t("history.title"), self.tr_.t("history.subtitle")), 1)

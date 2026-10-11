@@ -162,8 +162,17 @@ class FanVisualizer(ThemedWidget):
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
         painter.setPen(QColor(self.theme.palette.text) if self._rpm is not None else QColor(self.theme.palette.text_faint))
-        text_rect = QRectF(center.x() - hub, center.y() - 12, hub * 2, 18)
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, main)
+        # Keep the readout inside the hub circle; the unavailable message is a
+        # sentence, so it wraps and is vertically centred rather than overflowing
+        # the small hub box it used to be clipped by.
+        flags = int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap)
+        box_w = min(radius * 1.5, max(hub * 2, hub * 2.8))
+        needed = painter.fontMetrics().boundingRect(
+            0, 0, int(box_w), 1000, flags, main
+        ).height()
+        box_h = max(hub * 1.6, float(needed))
+        text_rect = QRectF(center.x() - box_w / 2, center.y() - box_h / 2, box_w, box_h)
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, main)
         if self._rpm is not None:
             unit_font = QFont(self.font())
             unit_font.setPointSizeF(TYPE["caption"] - 1)

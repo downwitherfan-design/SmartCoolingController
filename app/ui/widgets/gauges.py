@@ -149,8 +149,13 @@ class _ArcGauge(ThemedWidget):
 
     # -- painting ----------------------------------------------------------
 
+    #: Vertical space reserved above the arc for the caption and below it for
+    #: the trend line, so neither collides with the arc's upper/lower stroke.
+    BAND = 20.0
+
     def _geometry(self) -> tuple[QRectF, float]:
-        side = min(self.width(), self.height()) - 24
+        side = min(self.width() - 16, self.height() - 16 - 2 * self.BAND)
+        side = max(24.0, side)
         rect = QRectF(0, 0, side, side)
         rect.moveCenter(QPointF(self.width() / 2, self.height() / 2))
         return rect, side
@@ -232,7 +237,7 @@ class _ArcGauge(ThemedWidget):
             sub_font.setPointSizeF(TYPE["caption"])
             painter.setFont(sub_font)
             painter.setPen(QColor(self.theme.palette.text_faint))
-            sub_rect = QRectF(rect.left(), rect.bottom() - 6, rect.width(), 18)
+            sub_rect = QRectF(rect.left(), rect.bottom() + 2, rect.width(), self.BAND)
             painter.drawText(sub_rect, Qt.AlignmentFlag.AlignCenter, self._sublabel)
 
         if self._label:
@@ -241,7 +246,7 @@ class _ArcGauge(ThemedWidget):
             label_font.setWeight(QFont.Weight.DemiBold)
             painter.setFont(label_font)
             painter.setPen(QColor(self.theme.palette.text_muted))
-            label_rect = QRectF(rect.left(), rect.top() - 2, rect.width(), 18)
+            label_rect = QRectF(rect.left(), rect.top() - self.BAND, rect.width(), self.BAND)
             painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, self._label.upper())
 
     def _fraction(self, value: float) -> float:
