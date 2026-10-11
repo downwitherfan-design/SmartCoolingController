@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from app import APP_NAME
+from app.application.health_worker import HealthCheckWorker
 from app.core.enums import ConnectionState, Language, PerformanceMode
 from app.core.events import Event
 from app.models.telemetry import TelemetrySnapshot
@@ -150,13 +151,17 @@ class MainWindow(QMainWindow):
         # Subsystem health used to be computed only when the Diagnostics page
         # was opened, so the rail badge and dashboard health card went stale for
         # the rest of the session.  A dedicated, slower timer keeps them live.
-        # The probes are cheap liveness checks (see _probe_database), so this
-        # cadence is safe on the GUI thread.
+        # The check runs on a worker thread: a probe touches hardware (a WMI/LHM
+        # read enumerates disks and can take tens of milliseconds or block), and
+        # the GUI thread must never perform unpredictable I/O.  The report comes
+        # back through the bus -> Qt bridge, exactly like telemetry.
+        self._health_worker = HealthCheckWorker(self.services.health.check)
+        self._health_worker.start()
         self._health_timer = QTimer(self)
         self._health_timer.setInterval(HEALTH_INTERVAL_MS)
-        self._health_timer.timeout.connect(self._refresh_health)
+        self._health_timer.timeout.connect(self._health_worker.request)
         self._health_timer.start()
-        self._refresh_health()
+        self._health_worker.request()
 
         last = services.config.window.selected_page or "dashboard"
         self.show_page(last if last in PAGE_CLASSES else "dashboard")
@@ -675,16 +680,6 @@ class MainWindow(QMainWindow):
 
     # -- status tick -------------------------------------------------------
 
-    def _refresh_health(self) -> None:
-        """Recompute subsystem health off the timer.
-
-        ``HealthService.check`` publishes ``TOPIC_HEALTH``, which the bridge
-        marshals back onto the GUI thread and :meth:`_on_health` renders.  The
-        call is synchronous on the GUI thread; the probes are deliberately cheap
-        (liveness queries only) so a large database cannot stall the UI.
-        """
-        self.services.health.check()
-
     def _tick_status(self) -> None:
         self.status.set_rate(self.services.telemetry.interval_s)
         snapshot = self.services.telemetry.last_snapshot
@@ -753,6 +748,10 @@ class MainWindow(QMainWindow):
         self._shutting_down = True
         self._save_window_state()
         self.animations.stop_all()
+        with contextlib.suppress(Exception):
+            self._health_timer.stop()
+        with contextlib.suppress(Exception):
+            self._health_worker.stop()
         with contextlib.suppress(Exception):
             self._bridge.detach()
         for page in list(self._pages.values()):

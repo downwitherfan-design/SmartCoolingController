@@ -419,13 +419,17 @@ class ApplicationServices:
         return HealthStatus.UNKNOWN, "health.detail.not_connected"
 
     def _probe_sensors(self):
-        try:
-            readings = self.registry.read()
-        except Exception as exc:  # noqa: BLE001
-            return HealthStatus.ERROR, str(exc)
-        if not readings:
-            return HealthStatus.WARNING, "health.detail.no_sensors"
-        return HealthStatus.HEALTHY, f"{len(readings)} sensors"
+        # A health check must be a cheap, pure function of state the app already
+        # holds.  Reading hardware here would put an unpredictable WMI/LHM call
+        # (disk enumeration alone is tens of ms) on whatever thread asked for
+        # the report — historically the GUI thread.  The telemetry sampler owns
+        # the read cadence and caches the descriptor list, so derive from that.
+        descriptors = self.telemetry.sensors
+        if descriptors:
+            return HealthStatus.HEALTHY, f"{len(descriptors)} sensors"
+        if self.telemetry.last_snapshot is None:
+            return HealthStatus.UNKNOWN, "health.detail.no_telemetry"
+        return HealthStatus.WARNING, "health.detail.no_sensors"
 
     def _probe_database(self):
         if self.persistence is None:
