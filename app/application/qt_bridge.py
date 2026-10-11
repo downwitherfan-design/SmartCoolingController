@@ -56,6 +56,7 @@ class QtEventBridge(QObject):
         self._coalesced: set[str] = set()
         self._pending: dict[str, Event] = {}
         self._drain_scheduled = False
+        self._attached = False
         self._lock = threading.Lock()
         self._drain_requested.connect(self._drain)
 
@@ -70,6 +71,8 @@ class QtEventBridge(QObject):
         that topic, collapsing a backlog while the GUI thread is busy.
         """
         coalesced = set(coalesce)
+        with self._lock:
+            self._attached = True
         for topic in topics:
             if topic in self._topics:
                 if topic in coalesced:
@@ -82,6 +85,11 @@ class QtEventBridge(QObject):
 
     def detach(self) -> None:
         """Unsubscribe from every topic and drop any queued coalesced events."""
+        with self._lock:
+            # Mark detached *before* unsubscribing so a ``_relay`` already in
+            # flight on a publisher thread (``EventBus.publish`` snapshots its
+            # handler list) sees the flag and delivers nothing to a dying UI.
+            self._attached = False
         for unsubscribe in self._unsubscribe:
             unsubscribe()
         self._unsubscribe.clear()
@@ -101,9 +109,14 @@ class QtEventBridge(QObject):
         # Called on the publisher's thread.  ``emit`` is thread-safe and, for a
         # receiver living on another thread, Qt queues the slot invocation.
         if event.topic not in self._coalesced:
+            with self._lock:
+                if not self._attached:
+                    return
             self.received.emit(event)
             return
         with self._lock:
+            if not self._attached:
+                return
             self._pending[event.topic] = event
             if self._drain_scheduled:
                 return
@@ -113,6 +126,11 @@ class QtEventBridge(QObject):
     def _drain(self) -> None:
         """Deliver the newest coalesced event per topic (runs on the GUI thread)."""
         with self._lock:
+            if not self._attached:
+                # Detached (or never attached): drop anything queued.
+                self._pending.clear()
+                self._drain_scheduled = False
+                return
             # Swap the map atomically: an event published right now lands in the
             # fresh map and is delivered by the next drain, never dropped.
             pending = self._pending

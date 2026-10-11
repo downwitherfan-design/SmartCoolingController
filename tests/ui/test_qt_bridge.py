@@ -166,3 +166,94 @@ def test_detach_drops_pending_coalesced_events(qapp) -> None:
     qapp.processEvents()
     assert seen == [], "a detached bridge must not deliver queued events"
 
+
+
+def test_detach_during_publication_delivers_nothing(qapp) -> None:
+    """Shutdown race: a relay already in flight must not reach a detached UI.
+
+    ``EventBus.publish`` snapshots its handler list, so ``detach()`` can run
+    after the bridge's relay was captured but before it is called.  The bridge
+    must observe the detach and drop the event instead of emitting into a window
+    that is being torn down.
+    """
+    bus = EventBus()
+    bridge = QtEventBridge(bus)
+    seen: list[object] = []
+    bridge.received.connect(seen.append)
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocker(event: Event) -> None:
+        entered.set()
+        release.wait(5)
+
+    bus.subscribe(TOPIC, blocker)  # registered before the bridge: runs first
+    bridge.attach([TOPIC], coalesce=[TOPIC])
+
+    worker = threading.Thread(target=lambda: bus.publish(TOPIC, 1))
+    worker.start()
+    assert entered.wait(5), "publish() never snapshotted the handler list"
+    # publish() has snapshotted handlers; detach() while the relay is pending.
+    bridge.detach()
+    release.set()
+    worker.join(timeout=5)
+    qapp.processEvents()
+
+    assert seen == [], "a bridge detached mid-publication must deliver nothing"
+
+
+def test_reattach_after_detach_resumes_delivery(qapp) -> None:
+    """detach() then attach() again must work (lifecycle: reconnect)."""
+    bus = EventBus()
+    bridge = QtEventBridge(bus)
+    seen: list[object] = []
+    bridge.received.connect(lambda e: seen.append(e.payload))
+
+    bridge.attach([TOPIC], coalesce=[TOPIC])
+    _publish_from_worker(bus, TOPIC, [1])
+    qapp.processEvents()
+    assert seen == [1]
+
+    bridge.detach()
+    _publish_from_worker(bus, TOPIC, [2])
+    qapp.processEvents()
+    assert seen == [1], "detached bridge must not deliver"
+
+    bridge.attach([TOPIC], coalesce=[TOPIC])
+    _publish_from_worker(bus, TOPIC, [3])
+    qapp.processEvents()
+    assert seen == [1, 3], "re-attached bridge must resume delivery"
+
+
+def test_high_pressure_stays_bounded_and_delivers_newest(qapp) -> None:
+    """5000 publications while the GUI is blocked must collapse to one, newest."""
+    bus = EventBus()
+    bridge = QtEventBridge(bus)
+    seen: list[object] = []
+    bridge.received.connect(lambda e: seen.append(e.payload))
+    bridge.attach([TOPIC], coalesce=[TOPIC])
+
+    _publish_from_worker(bus, TOPIC, range(5000))
+    assert bridge.pending_display_events == 1, "backlog must stay bounded to one"
+    qapp.processEvents()
+    assert seen == [4999], "the newest snapshot must be the one rendered"
+
+
+def test_critical_events_survive_display_congestion(qapp) -> None:
+    """Alerts published during a display backlog must all be delivered, in order."""
+    bus = EventBus()
+    bridge = QtEventBridge(bus)
+    alerts: list[object] = []
+    display: list[object] = []
+    bridge.received.connect(
+        lambda e: alerts.append(e.payload) if e.topic == "alert" else display.append(e.payload)
+    )
+    bridge.attach([TOPIC, "alert"], coalesce=[TOPIC])
+
+    _publish_from_worker(bus, TOPIC, range(1000))   # congest the display path
+    _publish_from_worker(bus, "alert", range(25))   # critical path while congested
+    qapp.processEvents()
+
+    assert alerts == list(range(25)), "every critical event must be delivered, in order"
+    assert display == [999], "display still shows only the newest snapshot"

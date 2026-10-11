@@ -29,6 +29,26 @@ decision.
 Invariant protected: GUI display work is bounded during congestion while the
 newest visual state is still rendered; critical events are never lost.
 
+Evidence (`scripts/diagnostics/backlog_probe.py`, 3000 snapshots published from a
+worker while the GUI thread was stalled 500 ms):
+
+| Path | frames rendered | frames replayed after the stall | max pending | recovery |
+|------|-----------------|----------------------------------|-------------|----------|
+| lossless | 3000 | 3000 | n/a (queued inside Qt) | 2.8 ms |
+| coalescing (AD-3) | 1 | 1 | 1 | 0.1 ms |
+
+Without coalescing the user watches 3000 obsolete frames replay after the stall;
+with it, exactly the newest frame is drawn and the backlog is bounded to one.
+
+Shutdown hardening (found while auditing the same path): `EventBus.publish`
+snapshots its handler list, so a `detach()` during application shutdown could run
+*after* the bridge's `_relay` was captured but before it was called — delivering
+an event to a window that was being torn down. `detach()` now clears an
+`_attached` flag before unsubscribing, and both `_relay` and `_drain` check it, so
+a detached (or never-attached) bridge delivers nothing.
+`test_detach_during_publication_delivers_nothing` pins the race; re-attach
+resumes delivery.
+
 ## AD-4 — One fitted-text primitive for every custom painter; the GUI gate renders text
 
 Custom-painted widgets (`gauges.py`, `fan.py`, `schematic.py`, `atoms.py`) sized
