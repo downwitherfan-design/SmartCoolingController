@@ -261,6 +261,15 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
   `app/services/health.py` applies the text rules to string values so support
   bundles (which are shared publicly) cannot leak a credential hidden in a log
   line.
+- **No setting may be a silent no-op.** A config field that persists (and
+  especially one shown as a control in Settings) with no reader is a lie about
+  the app's capabilities. `tests/unit/test_config.py` guards the V2.1 removals:
+  `telemetry.sensor_refresh_interval_s` and `appearance.{dashboard_preset,
+  view_mode, hidden_cards, card_order}` must stay gone. Do not wire
+  `sensor_refresh_interval_s` as a read-throttle — the engine reads every sample
+  for live telemetry and LHM refreshes inside `read()`; throttling it would
+  freeze CPU/GPU temperatures. `_Model` sets `extra="ignore"`, so a settings
+  file written by an older build still loads.
 
 ## GitHub push credential
 

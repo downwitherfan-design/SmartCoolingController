@@ -65,3 +65,46 @@ reflect actual work performed; nothing is backdated.
   (`test_services.py`) covering publish/suppress/severity gating.
 - Note: default ``alerts.windows_notifications`` is ``False`` (opt-in,
   privacy-respecting); tests enable it explicitly.
+
+## Phase 4 — config audit: dead settings removed (T4)
+
+- Audited every field in `app/core/config.py` against real readers. Two Settings
+  controls (`settings.dashboard_preset`, `settings.view_mode`) stored a value
+  that no code consumed; `telemetry.sensor_refresh_interval_s`,
+  `appearance.hidden_cards` and `appearance.card_order` had no reader at all.
+- Decision: remove, do not guess. `sensor_refresh_interval_s` especially must
+  *not* be wired as a read-throttle — the telemetry engine samples every tick
+  for live telemetry and LibreHardwareMonitor already refreshes inside `read()`;
+  honouring a 300 s interval would freeze CPU/GPU temperatures.
+- Removed the four config fields, the two Settings rows and the orphaned EN/FA
+  i18n keys (`settings.preset.*`, `settings.view.*`). Regenerated catalogs stay
+  symmetric (test_i18n green).
+- Tests: 3 new in `tests/unit/test_config.py` (fields stay removed; a legacy
+  settings.json carrying the removed keys still loads value-for-value). Verified
+  non-vacuous by re-adding `dashboard_preset` (test fails).
+- Full gate: ruff + mypy clean; suite 330 passed.
+
+## Phase 11 — release-integrity: version consistency guarded
+
+- The V2.0.0 audit listed "displayed version == package metadata" as a hand
+  check; nothing enforced it. Added `tests/unit/test_version_consistency.py`
+  pinning `APP_VERSION` against `pyproject.toml`, the PyInstaller spec, the Inno
+  Setup default, the generated VERSIONINFO (driven through the real generator),
+  the README download links and the release-notes checksum example.
+- First CI attempt failed on Windows: the test read the *generated* (gitignored)
+  `installer/version_info.txt`, absent on a clean checkout. Fixed to call
+  `scripts/build/build.py::_write_version_info` and restore any prior artefact.
+- Verified non-vacuous: changing only `pyproject.toml`'s version fails it.
+
+## Phase 5 — Windows delivery revalidation (asset integrity)
+
+- The CI run for the GUI commit (`2419ae4`) built the full Windows pipeline
+  green and uploaded a 129 MB `smartcooling-windows` artefact; downloaded and
+  inspected it: `SmartCoolingController-2.0.0-setup.exe` (MZ/PE), portable zip,
+  source zip, `installer-manifest.json`, `checksums.sha256`.
+- `checksums.sha256` now lists the installer with a digest matching the actual
+  file — DEFECT-1 (shipped in v2.0.0) is closed and CI-guarded.
+- `releases/latest/download/<asset>` resolves 302 → the v2.0.0 release for all
+  three assets plus `checksums.sha256` (link validity confirmed).
+- Executing the installer on Windows remains BLOCKED in this Linux container;
+  the asset is verifiable (hash/size/magic) but not runnable here.
