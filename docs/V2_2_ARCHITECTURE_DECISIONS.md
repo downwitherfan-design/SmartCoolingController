@@ -130,3 +130,50 @@ although `AnomalyThresholds.stale_after_s` and `AnomalyKind.SENSOR_DISAPPEARED`
 exist for exactly that case. The live detector now tracks metric availability
 transitions and emits `SENSOR_DISAPPEARED`, consuming the `stale_after_s`
 threshold that was previously declared but never read.
+
+## AD-5 — Aggregate the history range inside SQLite; never cap it with a row limit
+
+Status: implemented and tested (`app/persistence/repositories.py`,
+`app/ui/pages/history.py`, `tests/integration/test_history_range.py`).
+
+The history page loaded a range with `SnapshotRepository.range(since, until,
+limit=MAX_ROWS)` — `ORDER BY ts ASC LIMIT 20000` — then decimated in Python. On
+a database sampled once per second this is a correctness defect, not just a cost:
+the ascending limit returns the *oldest* 20 000 rows, so a 24h view silently
+showed only its first ~5.5 h and hid the most recent ~18.5 h, and every summary
+statistic (max, average, time-above) described that stale prefix. Measured on a
+250 000-row database, the old 24h query's newest row was 18.4 h behind now and
+the old 7d query's was 64 h behind.
+
+Decision: two dedicated, index-driven queries replace the capped load.
+
+- `series_bucketed(since, until, bucket_s)` — `GROUP BY CAST(ts / bucket_s)` with
+  `AVG(...)` per metric. It scans the `ts` index once and returns `range /
+  bucket_s` points, so the chart always covers the whole range. Averaging in SQL
+  matches the previous in-Python decimation, so the drawn curve is unchanged.
+- `aggregate(since, until, threshold_c, bucket_s)` — `COUNT/MIN/MAX/AVG` over the
+  whole range plus the count of samples at or above the threshold. The time-above
+  figure is `count(above) x interval`, where `interval` is the observed mean
+  spacing between samples (capped at the display bucket so a sampling gap cannot
+  over-count). The engine samples on a fixed cadence, so this is exact for the
+  normal case and avoids a window function that materialises every row.
+
+The in-memory ring remains the fallback when the database has nothing for the
+range (before the writer flushes, or in portable mode); it is bucketed and
+summarised into the same shape by `_bucket_rows` / `_summarise`.
+
+Evidence (`scripts/diagnostics/history_probe.py`, 250 000 rows at 1 s):
+
+| range | old newest-missing | new newest-missing | old total | new total |
+|-------|--------------------|--------------------|-----------|-----------|
+| 1h    | 0.1 min            | 0.1 min            | 12.7 ms   | 4.9 ms    |
+| 24h   | 1106.7 min         | 0.3 min            | 98.6 ms   | 82.6 ms   |
+| 7d    | 3833.4 min         | 7.3 min            | 67.8 ms   | 233.3 ms  |
+
+The 7d path is slower because it now scans the whole range — the work the old
+code skipped by loading only a 20 000-row prefix and drawing the wrong window.
+That scan is the price of a correct chart; `_decimate` (the old Python bucketing)
+is gone, its logic folded into the SQL query and the ring fallback.
+
+Invariant protected: a range the user selects is the range the chart draws and
+the statistics describe — never a row-capped prefix that hides the newest data.

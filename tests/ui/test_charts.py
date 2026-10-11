@@ -75,6 +75,40 @@ def test_history_keeps_user_choice_after_first_show(qapp, services) -> None:
         assert page._range == "d7"
 
 
+def test_history_draws_the_newest_samples_not_a_stale_prefix(qapp, services) -> None:
+    """A wide range must include the latest samples, not a capped oldest prefix.
+
+    The previous query loaded ``range(limit=20000)`` ordered ascending, so a 24h
+    view on a fast-sampled database showed only its oldest hours.  This seeds
+    more rows than the old cap and asserts the drawn trace reaches the present.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.telemetry import TelemetrySnapshot
+
+    end = datetime.now(UTC)
+    count = 30_000
+    batch = []
+    for index in range(count):
+        snapshot = TelemetrySnapshot(
+            sequence=index,
+            timestamp=end - timedelta(seconds=count - 1 - index),
+            simulated=True,
+        )
+        snapshot.cpu.temperature = 40.0 + (index % 100) * 0.25
+        batch.append(snapshot)
+    services.persistence.snapshots.insert_many(batch)
+
+    with _window(qapp, services) as window:
+        window.show_page("history")
+        page = window._pages["history"]
+        page.reload("h24")
+        xs, ys = page.chart_panel.chart._data["cpu"]
+        assert xs, "the chart has CPU points"
+        assert len(xs) == len(ys)
+        assert xs[-1] >= end.timestamp() - 180
+
+
 def test_lightweight_mode_reduces_chart_detail(qapp, services) -> None:
     """Lightweight mode must actually change rendering, not just be stored.
 

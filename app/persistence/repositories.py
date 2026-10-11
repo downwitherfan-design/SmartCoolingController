@@ -16,7 +16,7 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypedDict
 
 from app.core.enums import (
     AlertCategory,
@@ -114,6 +114,15 @@ class SettingsRepository:
 # ---------------------------------------------------------------------------
 
 
+class SeriesPoint(TypedDict):
+    """One averaged chart point, as returned by :meth:`SnapshotRepository.series_bucketed`."""
+
+    ts: float
+    cpu_temp: float | None
+    gpu_temp: float | None
+    fan_pwm: float | None
+
+
 class SnapshotRepository:
     _COLUMNS = (
         "ts", "seq", "cpu_temp", "gpu_temp", "cpu_usage", "gpu_usage", "ram_usage",
@@ -167,6 +176,91 @@ class SnapshotRepository:
             "SELECT * FROM snapshots WHERE ts BETWEEN ? AND ? ORDER BY ts ASC LIMIT ?",
             (since, until, limit),
         )
+
+    def series_bucketed(
+        self, since: float, until: float, bucket_s: int
+    ) -> list[SeriesPoint]:
+        """Averaged chart series over ``[since, until]``, one point per bucket.
+
+        The whole range is aggregated *inside SQLite*, so a wide range never has
+        to materialise every raw row: the query scans the ``ts`` index once but
+        returns only ``range / bucket_s`` points.  Averaging matches the page's
+        own decimation, so the drawn curve is identical to bucketing the full
+        rows — without a row cap that would otherwise silently truncate the
+        range and drop the newest data.
+        """
+        bucket = max(1, int(bucket_s))
+        rows = self._db.query(
+            """
+            SELECT CAST(ts / ? AS INTEGER) AS bucket,
+                   AVG(cpu_temp) AS cpu_temp,
+                   AVG(gpu_temp) AS gpu_temp,
+                   AVG(fan_pwm)  AS fan_pwm
+            FROM snapshots
+            WHERE ts BETWEEN ? AND ?
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            """,
+            (bucket, since, until),
+        )
+        return [
+            {
+                "ts": float(row["bucket"] * bucket),
+                "cpu_temp": row["cpu_temp"],
+                "gpu_temp": row["gpu_temp"],
+                "fan_pwm": row["fan_pwm"],
+            }
+            for row in rows
+        ]
+
+    def aggregate(
+        self, since: float, until: float, *, threshold_c: float, bucket_s: int
+    ) -> dict[str, float | None]:
+        """Whole-range summary over ``[since, until]``.
+
+        Returns the row count, per-metric min/max/average and the seconds the CPU
+        spent at or above ``threshold_c`` — all computed over the *entire* range,
+        never a truncated sample.
+
+        The time-above figure is ``count(above) x interval``, where ``interval``
+        is the observed mean spacing between samples.  The engine samples on a
+        fixed cadence, so this is exact for the normal case and, unlike a window
+        function that materialises every row, it is a single index scan that
+        stays cheap on a multi-day database.  ``interval`` is capped at the
+        display bucket so a sampling gap can never over-count the time.
+        """
+        bucket = max(1, int(bucket_s))
+        summary = self._db.query_one(
+            """
+            SELECT COUNT(*) AS samples,
+                   MIN(cpu_temp) AS cpu_min, MAX(cpu_temp) AS cpu_max, AVG(cpu_temp) AS cpu_avg,
+                   MIN(gpu_temp) AS gpu_min, MAX(gpu_temp) AS gpu_max, AVG(gpu_temp) AS gpu_avg,
+                   AVG(fan_rpm)  AS fan_avg, MAX(fan_rpm)  AS peak_fan,
+                   MIN(ts) AS first_ts, MAX(ts) AS last_ts,
+                   SUM(CASE WHEN cpu_temp >= ? THEN 1 ELSE 0 END) AS above_n
+            FROM snapshots
+            WHERE ts BETWEEN ? AND ?
+            """,
+            (threshold_c, since, until),
+        )
+        samples = float(summary["samples"]) if summary else 0.0
+        above_seconds = 0.0
+        if summary is not None and samples > 1:
+            span = float(summary["last_ts"]) - float(summary["first_ts"])
+            interval = min(bucket, span / (samples - 1)) if span > 0 else 0.0
+            above_seconds = float(summary["above_n"] or 0) * interval
+        return {
+            "samples": samples,
+            "cpu_min": summary["cpu_min"] if summary else None,
+            "cpu_max": summary["cpu_max"] if summary else None,
+            "cpu_avg": summary["cpu_avg"] if summary else None,
+            "gpu_min": summary["gpu_min"] if summary else None,
+            "gpu_max": summary["gpu_max"] if summary else None,
+            "gpu_avg": summary["gpu_avg"] if summary else None,
+            "fan_avg": summary["fan_avg"] if summary else None,
+            "peak_fan": summary["peak_fan"] if summary else None,
+            "time_above_s": above_seconds,
+        }
 
     def count(self) -> int:
         row = self._db.query_one("SELECT COUNT(*) AS n FROM snapshots")
@@ -630,6 +724,7 @@ class DiagnosticRepository:
 
 
 __all__ = [
+    "SeriesPoint",
     "SettingsRepository",
     "SnapshotRepository",
     "SessionRepository",

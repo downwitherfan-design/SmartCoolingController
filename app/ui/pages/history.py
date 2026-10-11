@@ -3,17 +3,20 @@
 Reads recorded snapshots from the database, renders them on the shared chart and
 computes summary analytics: min/max/average, time above the warning threshold,
 and a count of thermal excursions.  All statistics are labelled as *derived*
-(spec §108) and the page states the row count it actually loaded, so a truncated
-query never masquerades as the whole history.
+(spec §108).  The range is aggregated inside SQLite so the chart and the figures
+always describe the whole selected window; the page reports the number of
+samples that window contained.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TypedDict
 
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout
 
 from app.models.telemetry import TelemetrySnapshot
+from app.persistence.repositories import SeriesPoint
 from app.ui.design import SPACE
 from app.ui.pages.base import ScrollPage
 from app.ui.widgets.atoms import (
@@ -156,75 +159,63 @@ class HistoryPage(ScrollPage):
         _, _, hours, bucket_s = preset
         until = datetime.now().timestamp()
         since = until - hours * 3600
-        rows = self._query(since, until)
-        self._render(rows, since, until, bucket_s)
+        self._render(since, until, bucket_s)
 
-    def _query(self, since: float, until: float) -> list:
+    def _render(self, since: float, until: float, bucket_s: int) -> None:
+        """Load and draw one range.
+
+        The database path aggregates inside SQLite, so the whole range is drawn
+        (never a row-capped prefix that would hide the newest data) and the
+        statistics cover every sample.  Only when the database has nothing for
+        the range — before the writer flushes, or in portable mode — does it fall
+        back to the in-memory ring.
+        """
+        threshold = self.services.config.alerts.cpu_warning_c
+        points: list[SeriesPoint] = []
+        stats: dict[str, float | None] = {}
         persistence = self.services.persistence
-        rows: list = []
         if persistence is not None:
             try:
-                rows = persistence.snapshots.range(since, until, limit=MAX_ROWS)
+                points = persistence.snapshots.series_bucketed(since, until, bucket_s)
+                stats = persistence.snapshots.aggregate(
+                    since, until, threshold_c=threshold, bucket_s=bucket_s
+                )
             except Exception:  # noqa: BLE001 - a broken query must not crash the UI
-                rows = []
-        if rows:
-            return rows
-        # Before the writer flushes (or in portable mode) fall back to the
-        # in-memory ring so the page is never mysteriously empty mid-session.
-        return _rows_from_history(self.services.telemetry.history(), since, until)
+                points, stats = [], {}
+        if not points:
+            rows = _rows_from_history(self.services.telemetry.history(), since, until)
+            points = _bucket_rows(rows, bucket_s)
+            stats = _summarise(rows, bucket_s, threshold)
+        self._apply(points, stats)
 
-    def _render(self, rows: list, since: float, until: float, bucket_s: int) -> None:
-        self.empty.setVisible(not rows)
-        self.chart_panel.setVisible(bool(rows))
+    def _apply(self, points: list[SeriesPoint], stats: dict[str, float | None]) -> None:
+        samples = int(stats.get("samples") or 0)
+        self.empty.setVisible(not points)
+        self.chart_panel.setVisible(bool(points))
         self.row_badge.set_status(
-            f"{self.tr_.number(len(rows), grouping=True)} · {self.tr_.t('common.derived')}",
+            f"{self.tr_.number(samples, grouping=True)} · {self.tr_.t('common.derived')}",
             self.theme.color("secondary"),
         )
-        if not rows:
+        if not points:
             return
-        cpu_points, gpu_points, fan_points = [], [], []
-        cpu_values, gpu_values, fan_values = [], [], []
-        above = 0.0
-        threshold = self.services.config.alerts.cpu_warning_c
-        previous_ts: float | None = None
-        for row in rows:
-            ts = float(row["ts"])
-            cpu = row["cpu_temp"]
-            gpu = row["gpu_temp"]
-            fan_pwm = row["fan_pwm"]
-            if cpu is not None:
-                cpu_points.append((ts, float(cpu)))
-                cpu_values.append(float(cpu))
-                if previous_ts is not None and cpu >= threshold:
-                    above += min(bucket_s, ts - previous_ts)
-            if gpu is not None:
-                gpu_points.append((ts, float(gpu)))
-                gpu_values.append(float(gpu))
-            if fan_pwm is not None:
-                fan_points.append((ts, float(fan_pwm)))
-                fan_values.append(float(fan_pwm))
-            previous_ts = ts
-
         self.chart_panel.chart.clear()
-        self.chart_panel.chart.set_points("cpu", _decimate(cpu_points, bucket_s))
-        self.chart_panel.chart.set_points("gpu", _decimate(gpu_points, bucket_s))
-        self.chart_panel.chart.set_points("fan", _decimate(fan_points, bucket_s))
-
-        fan_rpm_values = [float(row["fan_rpm"]) for row in rows if row["fan_rpm"] is not None]
-        stats = {
-            "cpu_max": max(cpu_values) if cpu_values else None,
-            "cpu_min": min(cpu_values) if cpu_values else None,
-            "cpu_avg": sum(cpu_values) / len(cpu_values) if cpu_values else None,
-            "gpu_max": max(gpu_values) if gpu_values else None,
-            "gpu_min": min(gpu_values) if gpu_values else None,
-            "gpu_avg": sum(gpu_values) / len(gpu_values) if gpu_values else None,
-            "fan_avg": sum(fan_rpm_values) / len(fan_rpm_values) if fan_rpm_values else None,
-            "peak_fan": max(fan_rpm_values) if fan_rpm_values else None,
-            "time_above": above / 60.0,
-        }
+        cpu: list[tuple[float, float]] = []
+        gpu: list[tuple[float, float]] = []
+        fan: list[tuple[float, float]] = []
+        for point in points:
+            ts = point["ts"]
+            if point["cpu_temp"] is not None:
+                cpu.append((ts, point["cpu_temp"]))
+            if point["gpu_temp"] is not None:
+                gpu.append((ts, point["gpu_temp"]))
+            if point["fan_pwm"] is not None:
+                fan.append((ts, point["fan_pwm"]))
+        self.chart_panel.chart.set_points("cpu", cpu)
+        self.chart_panel.chart.set_points("gpu", gpu)
+        self.chart_panel.chart.set_points("fan", fan)
         self._last_stats = stats
-        self._update_cards(stats, len(rows))
-        self._update_rows(stats, len(rows), fan_values)
+        self._update_cards(stats, samples)
+        self._update_rows(stats, samples)
 
     def _update_cards(self, stats: dict[str, float | None], count: int) -> None:
         def show(key: str, value: float | None, decimals: int, token: str) -> None:
@@ -238,12 +229,13 @@ class HistoryPage(ScrollPage):
                     subtitle=f"{self.tr_.number(count, grouping=True)} · {self.tr_.t('common.derived')}",
                 )
 
-        show("cpu_max", stats["cpu_max"], 1, "warm")
-        show("gpu_max", stats["gpu_max"], 1, "warm")
-        show("fan_avg", stats["fan_avg"], 0, "primary")
-        show("time_above", stats["time_above"], 1, "danger")
+        show("cpu_max", stats.get("cpu_max"), 1, "warm")
+        show("gpu_max", stats.get("gpu_max"), 1, "warm")
+        show("fan_avg", stats.get("fan_avg"), 0, "primary")
+        above_minutes = (stats.get("time_above_s") or 0.0) / 60.0
+        show("time_above", above_minutes, 1, "danger")
 
-    def _update_rows(self, stats: dict[str, float | None], count: int, fan_values: list[float]) -> None:
+    def _update_rows(self, stats: dict[str, float | None], count: int) -> None:
         def value(key: str, decimals: int, suffix: str = "") -> str:
             raw = stats.get(key)
             if raw is None:
@@ -254,8 +246,9 @@ class HistoryPage(ScrollPage):
         self.event_rows["cpu_avg"].set_value(value("cpu_avg", 1, " °C"))
         self.event_rows["gpu_min"].set_value(value("gpu_min", 1, " °C"))
         self.event_rows["gpu_avg"].set_value(value("gpu_avg", 1, " °C"))
+        peak_fan = stats.get("peak_fan")
         self.event_rows["peak_fan"].set_value(
-            self.tr_.number(stats["peak_fan"], grouping=True) if stats["peak_fan"] is not None else "—"
+            self.tr_.number(peak_fan, grouping=True) if peak_fan is not None else "—"
         )
         self.event_rows["samples"].set_value(self.tr_.number(count, grouping=True))
 
@@ -272,11 +265,21 @@ class HistoryPage(ScrollPage):
             card.set_title(self.tr_.t(label_key))
 
 
+class _HistoryRow(TypedDict):
+    """A raw sample projected from the in-memory ring for the fallback path."""
+
+    ts: float
+    cpu_temp: float | None
+    gpu_temp: float | None
+    fan_rpm: float | None
+    fan_pwm: float | None
+
+
 def _rows_from_history(
     history: list[TelemetrySnapshot], since: float, until: float
-) -> list[dict[str, float | None]]:
+) -> list[_HistoryRow]:
     """Project in-memory snapshots into the same shape as database rows."""
-    rows: list[dict[str, float | None]] = []
+    rows: list[_HistoryRow] = []
     for snapshot in history:
         ts = snapshot.timestamp.timestamp()
         if ts < since or ts > until:
@@ -286,30 +289,74 @@ def _rows_from_history(
                 "ts": ts,
                 "cpu_temp": snapshot.cpu.temperature,
                 "gpu_temp": snapshot.gpu.temperature,
-                "cpu_usage": snapshot.cpu.usage,
-                "gpu_usage": snapshot.gpu.usage,
-                "ram_usage": snapshot.memory.usage_percent,
                 "fan_rpm": snapshot.fan.rpm,
                 "fan_pwm": snapshot.fan.pwm_percent,
-                "fan_target": snapshot.fan.target_percent,
-                "fan_power_w": snapshot.fan.power_w,
-                "pad_temp": snapshot.pad.temperature,
             }
         )
     return rows
 
 
-def _decimate(points: list[tuple[float, float]], bucket_s: int) -> list[tuple[float, float]]:
-    """Average points into time buckets to keep wide ranges cheap to draw."""
-    if bucket_s <= 1 or len(points) <= 2:
-        return points
-    buckets: dict[int, list[float]] = {}
-    for ts, value in points:
-        buckets.setdefault(int(ts // bucket_s), []).append(value)
-    result: list[tuple[float, float]] = []
-    for bucket, values in sorted(buckets.items()):
-        result.append((float(bucket * bucket_s), sum(values) / len(values)))
-    return result
+def _bucket_rows(rows: list[_HistoryRow], bucket_s: int) -> list[SeriesPoint]:
+    """Average in-memory rows into the same bucket shape as the SQL query."""
+    if not rows:
+        return []
+    bucket = max(1, int(bucket_s))
+    buckets: dict[int, dict[str, list[float]]] = {}
+    for row in rows:
+        slot = buckets.setdefault(int(float(row["ts"]) // bucket), {"cpu": [], "gpu": [], "fan": []})
+        if row["cpu_temp"] is not None:
+            slot["cpu"].append(float(row["cpu_temp"]))
+        if row["gpu_temp"] is not None:
+            slot["gpu"].append(float(row["gpu_temp"]))
+        if row["fan_pwm"] is not None:
+            slot["fan"].append(float(row["fan_pwm"]))
+
+    def mean(values: list[float]) -> float | None:
+        return sum(values) / len(values) if values else None
+
+    return [
+        {
+            "ts": float(slot_index * bucket),
+            "cpu_temp": mean(values["cpu"]),
+            "gpu_temp": mean(values["gpu"]),
+            "fan_pwm": mean(values["fan"]),
+        }
+        for slot_index, values in sorted(buckets.items())
+    ]
+
+
+def _summarise(
+    rows: list[_HistoryRow], bucket_s: int, threshold_c: float
+) -> dict[str, float | None]:
+    """Whole-range summary in the same shape as ``SnapshotRepository.aggregate``."""
+    cpu = [float(r["cpu_temp"]) for r in rows if r["cpu_temp"] is not None]
+    gpu = [float(r["gpu_temp"]) for r in rows if r["gpu_temp"] is not None]
+    fan = [float(r["fan_rpm"]) for r in rows if r["fan_rpm"] is not None]
+
+    def mean(values: list[float]) -> float | None:
+        return sum(values) / len(values) if values else None
+
+    above = 0.0
+    previous_ts: float | None = None
+    for row in rows:
+        ts = float(row["ts"])
+        cpu_temp = row["cpu_temp"]
+        if cpu_temp is not None and previous_ts is not None and float(cpu_temp) >= threshold_c:
+            above += min(bucket_s, ts - previous_ts)
+        previous_ts = ts
+
+    return {
+        "samples": float(len(rows)),
+        "cpu_min": min(cpu) if cpu else None,
+        "cpu_max": max(cpu) if cpu else None,
+        "cpu_avg": mean(cpu),
+        "gpu_min": min(gpu) if gpu else None,
+        "gpu_max": max(gpu) if gpu else None,
+        "gpu_avg": mean(gpu),
+        "fan_avg": mean(fan),
+        "peak_fan": max(fan) if fan else None,
+        "time_above_s": above,
+    }
 
 
 __all__ = ["HistoryPage", "RANGES"]
