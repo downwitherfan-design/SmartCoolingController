@@ -52,7 +52,7 @@ _RANGE_BY_SETTING = {
 
 DEFAULT_RANGE = "h1"
 
-MAX_ROWS = 20_000
+MAX_POINTS = 20_000
 
 
 class HistoryPage(ScrollPage):
@@ -91,7 +91,7 @@ class HistoryPage(ScrollPage):
             self.tr_,
             title=self.tr_.t("history.title"),
             ranges=[(key, self.tr_.t(label)) for key, label, _, _ in RANGES],
-            capacity=MAX_ROWS,
+            capacity=MAX_POINTS,
             series_visibility=self.services.config.charts.series_visibility,
         )
         self.chart_panel.add_series("cpu", self.tr_.t("dash.cpu"), unit="°C", color_index=0)

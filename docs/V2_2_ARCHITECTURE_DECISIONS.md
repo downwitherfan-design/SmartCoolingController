@@ -177,3 +177,35 @@ is gone, its logic folded into the SQL query and the ring fallback.
 
 Invariant protected: a range the user selects is the range the chart draws and
 the statistics describe — never a row-capped prefix that hides the newest data.
+
+## AD-6 — Stream exports; never cap them at the query row limit
+
+Status: implemented and tested (`app/persistence/repositories.py`,
+`app/services/export.py`, `tests/integration/test_services.py`).
+
+AD-5 fixed the history *view* but left the same latent defect in the export
+path: `ExportService.export_range` called `snapshots.range(since, until)`, whose
+default `limit=100_000` silently truncates. With the writer's 2 000 000-row cap
+(a 30-day retention window), an export of a full history would drop the newest
+~95% of rows without any error or warning — the user's data, quietly missing.
+
+Decision: `SnapshotRepository.iter_range(since, until, *, page=5000)` pages
+through the whole range with keyset pagination (`WHERE ts > last ORDER BY ts
+LIMIT page`) and yields rows. `export_range` consumes it, so the CSV/JSON writers
+now stream and memory is bounded by one page regardless of how many rows the
+range holds. `range()` is retained for callers that want a bounded, explicit
+list.
+
+The cursor is `ts` alone; a row sharing a timestamp with a page boundary is the
+only ambiguity, which is immaterial for a telemetry export and far cheaper than
+a `(ts, sequence)` composite cursor. A final short page terminates the loop, so
+there is no "one extra empty query" and no infinite loop on a full page of ties.
+
+Evidence: `tests/integration/test_history_range.py` inserts 12 500 rows, confirms
+`range(limit=1000)` returns 1000 while `iter_range(page=1000)` returns all 12 500
+in ascending order; `tests/integration/test_services.py` exports 7 500 rows and
+asserts the file holds one header plus every row.
+
+Invariant protected: an export contains every sample in the requested range; a
+row limit can bound a list but never silently truncate a file the user asked for.
+

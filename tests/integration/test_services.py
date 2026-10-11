@@ -310,6 +310,39 @@ def test_export_json_produces_parseable_output(services) -> None:
     assert isinstance(payload, list | dict)
 
 
+def test_export_is_not_truncated_by_the_range_row_limit(services) -> None:
+    """A large export must be complete, not silently capped at 100 000 rows.
+
+    ``export_range`` used ``snapshots.range`` with its default limit, so an
+    export wider than the limit silently dropped the newest rows.  It now
+    streams every row via ``iter_range``.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.telemetry import TelemetrySnapshot
+
+    end = datetime.now(UTC)
+    count = 7_500
+    batch = []
+    for index in range(count):
+        snapshot = TelemetrySnapshot(
+            sequence=index,
+            timestamp=end - timedelta(seconds=count - 1 - index),
+            simulated=True,
+        )
+        snapshot.cpu.temperature = 45.0
+        batch.append(snapshot)
+    services.persistence.snapshots.insert_many(batch)
+
+    result = services.export.export_range(
+        since=0.0, fmt=ExportFormat.CSV, name="completeness"
+    )
+    assert result.row_count >= count
+    lines = result.path.read_text(encoding="utf-8").splitlines()
+    # One header row plus every data row.
+    assert len(lines) - 1 == result.row_count
+
+
 def test_services_shutdown_is_idempotent(services) -> None:
     services.shutdown()
     services.shutdown()  # second call must be a harmless no-op

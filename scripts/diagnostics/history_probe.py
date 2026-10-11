@@ -2,7 +2,7 @@
 
 The history page must stay responsive — and *correct* — when the user switches
 range on a database that has been recording for days.  This probe compares the
-old approach (load rows with ``range(limit=MAX_ROWS)``, decimate in Python) with
+old approach (load rows with ``range(limit=MAX_POINTS)``, decimate in Python) with
 the new one (aggregate inside SQLite) against a real database built by the
 application's own :class:`~app.persistence.repositories.SnapshotRepository`.
 
@@ -36,7 +36,7 @@ if str(ROOT) not in sys.path:
 from app.core.enums import Language, ThemeMode  # noqa: E402
 from app.ui.design import build_theme  # noqa: E402
 from app.ui.i18n import Translator  # noqa: E402
-from app.ui.pages.history import MAX_ROWS, RANGES  # noqa: E402
+from app.ui.pages.history import MAX_POINTS, RANGES  # noqa: E402
 
 
 def _make_snapshot(sequence: int, ts: datetime):
@@ -81,7 +81,7 @@ def _mean(values: list[float]) -> float | None:
 def _old_path(persistence, since: float, until: float, bucket_s: int, chart) -> dict[str, float]:
     """The previous implementation: capped rows, decimate in Python."""
     started = time.perf_counter()
-    rows = persistence.snapshots.range(since, until, limit=MAX_ROWS)
+    rows = persistence.snapshots.range(since, until, limit=MAX_POINTS)
     query_s = time.perf_counter() - started
     newest_covered = float(rows[-1]["ts"]) if rows else since
 
@@ -143,7 +143,7 @@ def _make_panel():
 
     theme = build_theme(ThemeMode.DARK)
     translator = Translator(Language.ENGLISH)
-    panel = ChartPanel(theme, translator, title="history", ranges=[], capacity=MAX_ROWS)
+    panel = ChartPanel(theme, translator, title="history", ranges=[], capacity=MAX_POINTS)
     panel.add_series("cpu", "CPU", unit="C", color_index=0)
     panel.add_series("gpu", "GPU", unit="C", color_index=1)
     panel.add_series("fan", "Fan", unit="%", color_index=2)

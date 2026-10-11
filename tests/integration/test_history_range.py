@@ -129,3 +129,19 @@ def test_aggregate_on_an_empty_range_is_all_none(persistence) -> None:
     assert stats["samples"] == 0
     assert stats["cpu_max"] is None
     assert stats["time_above_s"] == 0.0
+
+
+def test_iter_range_pages_through_every_row(persistence) -> None:
+    end = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    _seed(persistence, end=end, count=12_500, step_s=1.0)
+    until = end.timestamp()
+    since = until - 12_500
+
+    rows = list(persistence.snapshots.iter_range(since, until, page=1000))
+
+    # The old capped query would have stopped at the limit; iter_range does not.
+    assert len(persistence.snapshots.range(since, until, limit=1000)) == 1000
+    assert len(rows) == 12_500
+    stamps = [float(row["ts"]) for row in rows]
+    assert stamps == sorted(stamps)
+    assert stamps[-1] == pytest.approx(until)

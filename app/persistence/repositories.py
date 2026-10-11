@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from typing import Any, TypedDict
 
@@ -176,6 +176,37 @@ class SnapshotRepository:
             "SELECT * FROM snapshots WHERE ts BETWEEN ? AND ? ORDER BY ts ASC LIMIT ?",
             (since, until, limit),
         )
+
+    def iter_range(
+        self, since: float, until: float | None = None, *, page: int = 5000
+    ) -> Iterator[sqlite3.Row]:
+        """Yield every snapshot in ``[since, until]`` in ascending time order.
+
+        Unlike :meth:`range`, this never silently truncates: it pages through the
+        whole range with keyset pagination (``ts > last``), so a multi-day export
+        is complete while memory stays bounded by one page.  ``ts`` alone is the
+        cursor; rows that share a timestamp with a page boundary are the only
+        ambiguity, which is harmless for a telemetry export.
+        """
+        size = max(1, int(page))
+        cursor = since
+        while True:
+            if until is None:
+                rows = self._db.query(
+                    "SELECT * FROM snapshots WHERE ts > ? ORDER BY ts ASC LIMIT ?",
+                    (cursor, size),
+                )
+            else:
+                rows = self._db.query(
+                    "SELECT * FROM snapshots WHERE ts > ? AND ts <= ? ORDER BY ts ASC LIMIT ?",
+                    (cursor, until, size),
+                )
+            if not rows:
+                return
+            yield from rows
+            if len(rows) < size:
+                return
+            cursor = float(rows[-1]["ts"])
 
     def series_bucketed(
         self, since: float, until: float, bucket_s: int
