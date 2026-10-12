@@ -291,6 +291,36 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
   (`build_theme`) and chart cost (`LiveChart` clip + auto peak downsampling);
   `tests/ui/test_charts.py` fails if either is dropped.
 
+## V2.2 history / export data-path invariants
+
+- **The pagination cursor is the row value `(ts, id)`, not `ts`.** `SnapshotRepository.iter_range`
+  uses `WHERE (ts, id) > (cursor)` seeded at `(since, -1)`, so the lower bound is inclusive
+  (a strict `ts > since` dropped the row exactly at `since`) and rows that share a timestamp
+  at a page boundary are neither lost nor repeated. `id` is the `INTEGER PRIMARY KEY`. A
+  `ts`-only cursor re-introduces the tie bug; a row-value comparison also lets SQLite walk
+  `idx_snapshots_ts` without a temp B-tree sort. `tests/integration/test_history_audit.py`
+  and `test_history_range.py` guard all of this.
+- **Time-above uses the sampling cadence, never the display bucket.** `aggregate()` and the
+  page fallback `_summarise()` take `interval_s` = `telemetry.sample_interval_ms / 1000` and
+  compute `time_above_s = min(span, count x interval_s)`. Passing the chart bucket (60 s / 900 s)
+  inflated the figure by up to ~60x on a gappy range — 20 samples ten minutes apart read
+  105% of the whole span. The span cap makes a gap unable to manufacture time. The `history`
+  page and `scripts/diagnostics/history_probe.py` must keep passing `interval_s`.
+- **Exports stream and never silently truncate.** `ExportService.export_range` consumes
+  `iter_range`; do not reintroduce `snapshots.range(limit=...)`, whose default cap dropped the
+  newest rows of a wide export (AD-6). `_write` writes a `.part` file and atomically replaces
+  the target only on success, so a failed export leaves no partial file and is recorded with
+  an `error` status.
+- **History aggregation stays synchronous; measure before optimizing.** The worst case — a
+  cold week-view open on a database at its 2M-row cap — is ~0.5 s; the hour view is 4 ms. A
+  covering index (~14%), a larger page cache (no effect) and a single grouped scan (1.07x,
+  slower on the hour view) were each measured and rejected (AD-7). Any future change to this
+  path must come with a measurement; an optimization that does not measurably help is reverted.
+- **The audit suite is the oracle.** `tests/integration/test_history_audit.py` checks the
+  series and summary against an independent loop implementation on regular, irregular and
+  gapped data, plus boundaries, pagination ties and gap inflation. Run it (and
+  `test_services.py -k export`) before touching the history/export path.
+
 ## GUI correctness gate
 
 `app/ui/layout_check.py::find_layout_problems` is the single definition of a
