@@ -196,10 +196,15 @@ now stream and memory is bounded by one page regardless of how many rows the
 range holds. `range()` is retained for callers that want a bounded, explicit
 list.
 
-The cursor is `ts` alone; a row sharing a timestamp with a page boundary is the
-only ambiguity, which is immaterial for a telemetry export and far cheaper than
-a `(ts, sequence)` composite cursor. A final short page terminates the loop, so
-there is no "one extra empty query" and no infinite loop on a full page of ties.
+The cursor is the row value `(ts, id)` (`id` is the `INTEGER PRIMARY KEY`), with a
+strict `(ts, id) > (cursor)` predicate seeded at `(since, -1)`. This makes the
+lower bound inclusive of the row exactly at `since` (the previous strict
+`ts > since` dropped it) and never loses or repeats a row that shares a
+timestamp at a page boundary. Because SQLite can use the `idx_snapshots_ts`
+index directly for a row-value comparison, paging also avoids the temp B-tree
+sort that the `ts = ? AND id > ?` OR-form required. A final short page
+terminates the loop, so there is no "one extra empty query" and no infinite loop
+on a full page of ties.
 
 Evidence: `tests/integration/test_history_range.py` inserts 12 500 rows, confirms
 `range(limit=1000)` returns 1000 while `iter_range(page=1000)` returns all 12 500
@@ -209,3 +214,42 @@ asserts the file holds one header plus every row.
 Invariant protected: an export contains every sample in the requested range; a
 row limit can bound a list but never silently truncate a file the user asked for.
 
+
+## AD-7 — Keep history aggregation synchronous; measure before optimizing
+
+Status: investigated, no code change (evidence below).
+
+The history page loads a range synchronously on the GUI thread: one
+`series_bucketed` scan plus one `aggregate` scan over the same interval. On the
+writer's 2 000 000-row cap (a 30-day retention window at the default 0.5 s
+cadence) the week view is the worst case. Measured on Linux/offscreen against a
+real database built by the application's own repository:
+
+| range | series | aggregate | GUI block |
+|-------|--------|-----------|-----------|
+| 1 h   | 2.6 ms | 1.5 ms    | 4 ms      |
+| 24 h  | 41 ms  | 34 ms     | 75 ms     |
+| 7 d   | 292 ms | 229 ms    | **521 ms** |
+
+Three candidate optimizations were each measured and rejected:
+
+* **Covering index** `(ts, cpu_temp, gpu_temp, fan_pwm)` — 117 ms to 101 ms for
+  the week scan (~14%), while adding a second index that every insert must
+  maintain. Not worth the write cost and schema churn.
+* **Larger page cache** (`PRAGMA cache_size` up to 256 MB) — 530 ms to 524 ms.
+  The scan is index-page bound, not cache bound; no effect.
+* **Single grouped scan** returning both the series and the summary — 521 ms to
+  487 ms (1.07x) on the week view and *slower* on the hour view, because SQLite's
+  page cache already makes the second pass over the same range cheap while the
+  wider grouped query costs more per row. Implemented, measured, and reverted.
+
+Decision: keep the simple, correct pair of queries. The absolute worst case
+(cold page open, week view, database at its full 2 M-row cap) is ~0.5 s; below
+that it is tens of milliseconds. A background query thread would remove the
+freeze entirely but is a large, regression-prone change to a currently
+synchronous, well-tested page, so it is deliberately deferred rather than
+shipped on speculation. Revisit only if field telemetry shows page opens
+exceeding ~250 ms at typical (not worst-case) retention.
+
+Invariant protected: performance work must be justified by a measurement, not a
+hunch — an optimization that does not measurably help is reverted, not kept.
