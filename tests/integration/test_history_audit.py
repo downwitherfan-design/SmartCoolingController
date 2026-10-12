@@ -351,3 +351,38 @@ def test_the_newest_data_guard_rejects_a_capped_prefix(persistence) -> None:
 
     # The old behaviour does not satisfy that assertion — the guard has teeth.
     assert capped_prefix_buckets(20_000) < until - 3600
+
+
+def test_database_and_in_memory_summaries_agree(persistence) -> None:
+    """The SQL aggregate and the page's in-memory fallback must agree.
+
+    The history page uses the database path when it has rows and falls back to
+    ``_summarise`` over the in-memory ring otherwise; if the two disagree, the
+    numbers change depending on whether the writer has flushed yet.  This builds
+    the same samples in both, including a gap that used to inflate time-above.
+    """
+    from app.ui.pages.history import _rows_from_history, _summarise
+
+    base = 1_700_000_000.0
+    specs = [(base + i, 40.0 + (i % 20)) for i in range(10)]
+    specs += [(base + 600 + i, 90.0) for i in range(10)]  # gap, then above threshold
+
+    snapshots = []
+    for index, (ts, cpu) in enumerate(specs):
+        snapshot = TelemetrySnapshot(
+            sequence=index, timestamp=datetime.fromtimestamp(ts, tz=UTC), simulated=True
+        )
+        snapshot.cpu.temperature = cpu
+        snapshot.gpu.temperature = cpu - 3.0
+        snapshot.fan.pwm_percent = float(index % 101)
+        snapshot.fan.rpm = 1000.0 + (index % 500)
+        snapshots.append(snapshot)
+    persistence.snapshots.insert_many(snapshots)
+
+    since, until = specs[0][0], specs[-1][0]
+    from_db = persistence.snapshots.aggregate(since, until, threshold_c=80.0, interval_s=0.5)
+
+    history_rows = _rows_from_history(snapshots, since, until)
+    from_memory = _summarise(history_rows, 0.5, 80.0)
+
+    assert from_memory == pytest.approx(from_db)
