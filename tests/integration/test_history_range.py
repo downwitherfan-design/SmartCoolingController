@@ -102,7 +102,7 @@ def test_aggregate_describes_every_sample_in_the_range(persistence) -> None:
     until = end.timestamp()
     since = until - 24 * 3600
 
-    stats = persistence.snapshots.aggregate(since, until, threshold_c=80.0, bucket_s=60)
+    stats = persistence.snapshots.aggregate(since, until, threshold_c=80.0, interval_s=1.0)
 
     # 86_401 samples fall in the closed 24 h window, not the 20k row cap.
     assert stats["samples"] == pytest.approx(86_401, abs=2)
@@ -118,14 +118,14 @@ def test_aggregate_time_above_uses_the_sample_interval(persistence) -> None:
     until = end.timestamp()
     since = until - 600
 
-    stats = persistence.snapshots.aggregate(since, until, threshold_c=80.0, bucket_s=60)
+    stats = persistence.snapshots.aggregate(since, until, threshold_c=80.0, interval_s=1.0)
 
     # 440 samples at or above the threshold, one second apart -> 440 s.
     assert stats["time_above_s"] == pytest.approx(440.0, abs=2.0)
 
 
 def test_aggregate_on_an_empty_range_is_all_none(persistence) -> None:
-    stats = persistence.snapshots.aggregate(0.0, 1.0, threshold_c=80.0, bucket_s=60)
+    stats = persistence.snapshots.aggregate(0.0, 1.0, threshold_c=80.0, interval_s=0.5)
     assert stats["samples"] == 0
     assert stats["cpu_max"] is None
     assert stats["time_above_s"] == 0.0

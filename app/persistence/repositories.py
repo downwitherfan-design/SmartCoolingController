@@ -183,30 +183,40 @@ class SnapshotRepository:
         """Yield every snapshot in ``[since, until]`` in ascending time order.
 
         Unlike :meth:`range`, this never silently truncates: it pages through the
-        whole range with keyset pagination (``ts > last``), so a multi-day export
-        is complete while memory stays bounded by one page.  ``ts`` alone is the
-        cursor; rows that share a timestamp with a page boundary are the only
-        ambiguity, which is harmless for a telemetry export.
+        whole range with keyset pagination, so a multi-day export is complete
+        while memory stays bounded by one page.
+
+        The lower bound is **inclusive** — the row at exactly ``since`` is the
+        first one yielded, matching :meth:`range` and ``series_bucketed``.  The
+        cursor is ``(ts, id)``, so rows that share a timestamp (a duplicate
+        sample, or a tie on a page boundary) are neither skipped nor repeated;
+        ``id`` is the unique ``INTEGER PRIMARY KEY`` and is the final tiebreak
+        after the ``ts`` index.  At least one page's worth of rows must be
+        consumed before another query runs, so callers can stream a huge range
+        without materialising it.
         """
         size = max(1, int(page))
-        cursor = since
+        cursor_ts = float(since)
+        cursor_id = -1  # ids are >= 1, so the row at exactly ``since`` is included
         while True:
             if until is None:
-                rows = self._db.query(
-                    "SELECT * FROM snapshots WHERE ts > ? ORDER BY ts ASC LIMIT ?",
-                    (cursor, size),
-                )
+                where = "(ts, id) > (?, ?)"
+                params: list[object] = [cursor_ts, cursor_id]
             else:
-                rows = self._db.query(
-                    "SELECT * FROM snapshots WHERE ts > ? AND ts <= ? ORDER BY ts ASC LIMIT ?",
-                    (cursor, until, size),
-                )
+                where = "ts <= ? AND (ts, id) > (?, ?)"
+                params = [until, cursor_ts, cursor_id]
+            params.append(size)
+            rows = self._db.query(
+                f"SELECT * FROM snapshots WHERE {where} ORDER BY ts ASC, id ASC LIMIT ?",
+                params,
+            )
             if not rows:
                 return
             yield from rows
             if len(rows) < size:
                 return
-            cursor = float(rows[-1]["ts"])
+            cursor_ts = float(rows[-1]["ts"])
+            cursor_id = int(rows[-1]["id"])
 
     def series_bucketed(
         self, since: float, until: float, bucket_s: int
@@ -245,7 +255,7 @@ class SnapshotRepository:
         ]
 
     def aggregate(
-        self, since: float, until: float, *, threshold_c: float, bucket_s: int
+        self, since: float, until: float, *, threshold_c: float, interval_s: float
     ) -> dict[str, float | None]:
         """Whole-range summary over ``[since, until]``.
 
@@ -253,14 +263,17 @@ class SnapshotRepository:
         spent at or above ``threshold_c`` — all computed over the *entire* range,
         never a truncated sample.
 
-        The time-above figure is ``count(above) x interval``, where ``interval``
-        is the observed mean spacing between samples.  The engine samples on a
-        fixed cadence, so this is exact for the normal case and, unlike a window
-        function that materialises every row, it is a single index scan that
-        stays cheap on a multi-day database.  ``interval`` is capped at the
-        display bucket so a sampling gap can never over-count the time.
+        The time-above figure is ``count(above) x interval_s``, where
+        ``interval_s`` is the **nominal sampling cadence** the caller is
+        recording at (``telemetry.sample_interval_ms``), *not* the chart's display
+        bucket.  Multiplying by the display bucket — as an earlier revision did —
+        let a sampling gap inflate the result until it exceeded the whole covered
+        span (20 samples 10 minutes apart at a 60 s bucket reported 619 s
+        "above").  The product is bounded by the real span between the first and
+        last in-range sample, so a long gap can never invent time.  When the
+        caller has no nominal cadence (``interval_s <= 0``), the observed mean
+        spacing is used as a fallback.
         """
-        bucket = max(1, int(bucket_s))
         summary = self._db.query_one(
             """
             SELECT COUNT(*) AS samples,
@@ -275,11 +288,16 @@ class SnapshotRepository:
             (threshold_c, since, until),
         )
         samples = float(summary["samples"]) if summary else 0.0
-        above_seconds = 0.0
-        if summary is not None and samples > 1:
-            span = float(summary["last_ts"]) - float(summary["first_ts"])
-            interval = min(bucket, span / (samples - 1)) if span > 0 else 0.0
-            above_seconds = float(summary["above_n"] or 0) * interval
+        span = (
+            float(summary["last_ts"]) - float(summary["first_ts"])
+            if summary is not None and samples > 1
+            else 0.0
+        )
+        interval = float(interval_s)
+        if interval <= 0 and samples > 1 and span > 0:
+            interval = span / (samples - 1)
+        above_n = float(summary["above_n"] or 0) if summary else 0.0
+        above_seconds = min(span, above_n * max(0.0, interval)) if span > 0 else 0.0
         return {
             "samples": samples,
             "cpu_min": summary["cpu_min"] if summary else None,

@@ -116,7 +116,7 @@ def _new_path(persistence, since: float, until: float, bucket_s: int, chart) -> 
     """The new implementation: aggregate inside SQLite."""
     started = time.perf_counter()
     rows = persistence.snapshots.series_bucketed(since, until, bucket_s)
-    stats = persistence.snapshots.aggregate(since, until, threshold_c=80.0, bucket_s=bucket_s)
+    stats = persistence.snapshots.aggregate(since, until, threshold_c=80.0, interval_s=0.5)
     query_s = time.perf_counter() - started
     newest_covered = float(rows[-1]["ts"]) if rows else since
 

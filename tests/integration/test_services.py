@@ -343,6 +343,89 @@ def test_export_is_not_truncated_by_the_range_row_limit(services) -> None:
     assert len(lines) - 1 == result.row_count
 
 
+def test_export_crosses_the_old_row_limit_without_loss(services) -> None:
+    """Export 120 000 rows — past the old 100 000-row cap — and prove completeness.
+
+    The defect was a silent truncation at the range query's default limit.  This
+    inserts more rows than that limit and asserts every row is present exactly
+    once, in ascending time order, with no duplicate timestamp sequence.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.telemetry import TelemetrySnapshot
+
+    count = 120_000
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    batch = []
+    for index in range(count):
+        snapshot = TelemetrySnapshot(
+            sequence=index,
+            timestamp=start + timedelta(seconds=index),
+            simulated=True,
+        )
+        snapshot.cpu.temperature = 40.0 + (index % 100) * 0.25
+        batch.append(snapshot)
+    services.persistence.snapshots.insert_many(batch)
+
+    result = services.export.export_range(since=0.0, fmt=ExportFormat.CSV, name="crossing")
+
+    assert result.row_count == count
+    lines = result.path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) - 1 == count
+    # Ordering is preserved and every timestamp appears exactly once.
+    timestamps = [line.split(",", 1)[0] for line in lines[1:]]
+    assert timestamps == sorted(timestamps)
+    assert len(set(timestamps)) == count
+
+
+def test_export_failure_leaves_no_partial_file(services, monkeypatch) -> None:
+    """A write that fails partway must not leave a partial export or a false success.
+
+    ``_write`` writes to a ``.part`` file and atomically replaces the target only
+    on success.  Injecting an ``OSError`` mid-stream must raise, remove the
+    temporary file, and record the attempt as an error — never a truncated file
+    masquerading as a complete export.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    import pytest as _pytest
+
+    from app.core.errors import ExportError
+    from app.models.telemetry import TelemetrySnapshot
+
+    batch = []
+    for index in range(50):
+        snapshot = TelemetrySnapshot(
+            sequence=index,
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=index),
+            simulated=True,
+        )
+        batch.append(snapshot)
+    services.persistence.snapshots.insert_many(batch)
+
+    original = services.export._snapshot_row
+    calls = {"n": 0}
+
+    def flaky(row):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError("disk full")
+        return original(row)
+
+    monkeypatch.setattr(services.export, "_snapshot_row", flaky)
+
+    with _pytest.raises(ExportError):
+        services.export.export_range(since=0.0, fmt=ExportFormat.CSV, name="broken")
+
+    # No final file, and no leftover .part, remain in the export directory.
+    leftovers = [p for p in services.export._dir.iterdir() if p.name.startswith("broken")]
+    assert leftovers == []
+    # The failure is recorded as an error, not a success.
+    history = services.export.history(limit=10)
+    broken = [h for h in history if h.get("status") == "error"]
+    assert broken, "the failed export is recorded with an error status"
+
+
 def test_services_shutdown_is_idempotent(services) -> None:
     services.shutdown()
     services.shutdown()  # second call must be a harmless no-op

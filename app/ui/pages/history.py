@@ -171,6 +171,7 @@ class HistoryPage(ScrollPage):
         back to the in-memory ring.
         """
         threshold = self.services.config.alerts.cpu_warning_c
+        interval_s = self.services.config.telemetry.sample_interval_ms / 1000.0
         points: list[SeriesPoint] = []
         stats: dict[str, float | None] = {}
         persistence = self.services.persistence
@@ -178,14 +179,14 @@ class HistoryPage(ScrollPage):
             try:
                 points = persistence.snapshots.series_bucketed(since, until, bucket_s)
                 stats = persistence.snapshots.aggregate(
-                    since, until, threshold_c=threshold, bucket_s=bucket_s
+                    since, until, threshold_c=threshold, interval_s=interval_s
                 )
             except Exception:  # noqa: BLE001 - a broken query must not crash the UI
                 points, stats = [], {}
         if not points:
             rows = _rows_from_history(self.services.telemetry.history(), since, until)
             points = _bucket_rows(rows, bucket_s)
-            stats = _summarise(rows, bucket_s, threshold)
+            stats = _summarise(rows, interval_s, threshold)
         self._apply(points, stats)
 
     def _apply(self, points: list[SeriesPoint], stats: dict[str, float | None]) -> None:
@@ -326,9 +327,14 @@ def _bucket_rows(rows: list[_HistoryRow], bucket_s: int) -> list[SeriesPoint]:
 
 
 def _summarise(
-    rows: list[_HistoryRow], bucket_s: int, threshold_c: float
+    rows: list[_HistoryRow], interval_s: float, threshold_c: float
 ) -> dict[str, float | None]:
-    """Whole-range summary in the same shape as ``SnapshotRepository.aggregate``."""
+    """Whole-range summary in the same shape as ``SnapshotRepository.aggregate``.
+
+    Mirrors the SQL path: each above-threshold sample accounts for one nominal
+    sampling interval, and the total is bounded by the span between the first and
+    last sample, so a gap in the in-memory ring cannot inflate it either.
+    """
     cpu = [float(r["cpu_temp"]) for r in rows if r["cpu_temp"] is not None]
     gpu = [float(r["gpu_temp"]) for r in rows if r["gpu_temp"] is not None]
     fan = [float(r["fan_rpm"]) for r in rows if r["fan_rpm"] is not None]
@@ -336,14 +342,16 @@ def _summarise(
     def mean(values: list[float]) -> float | None:
         return sum(values) / len(values) if values else None
 
+    span = float(rows[-1]["ts"]) - float(rows[0]["ts"]) if len(rows) > 1 else 0.0
+    interval = float(interval_s)
+    if interval <= 0 and len(rows) > 1 and span > 0:
+        interval = span / (len(rows) - 1)
     above = 0.0
-    previous_ts: float | None = None
-    for row in rows:
-        ts = float(row["ts"])
-        cpu_temp = row["cpu_temp"]
-        if cpu_temp is not None and previous_ts is not None and float(cpu_temp) >= threshold_c:
-            above += min(bucket_s, ts - previous_ts)
-        previous_ts = ts
+    if span > 0:
+        above_n = sum(
+            1 for r in rows if r["cpu_temp"] is not None and float(r["cpu_temp"]) >= threshold_c
+        )
+        above = min(span, above_n * max(0.0, interval))
 
     return {
         "samples": float(len(rows)),
