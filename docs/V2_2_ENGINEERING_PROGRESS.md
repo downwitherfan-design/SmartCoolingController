@@ -107,7 +107,7 @@ every page — **0 defects**. `tests/ui/test_painted_text.py` pins each custom
 widget and includes a deliberate-overflow self-check that fails if the detector
 stops biting. AD-4 records the decision.
 
-## Quality gates (as of `9910c8a`)
+## Quality gates (as of `9337476`)
 
 - `ruff check app run.py tests scripts` → pass
 - `python -m mypy app` → success, 95 files
@@ -120,3 +120,49 @@ stops biting. AD-4 records the decision.
 - Phase 5: profile chart render under a full buffer and hidden-chart repaint.
 - Phase 8: memory/CPU/startup and package cost.
 - Phase 9: long soak run.
+
+## History data integrity + export reliability (as of `9337476`)
+
+This sprint audited the history/export data path against an independent oracle
+and fixed two correctness defects.
+
+Defect 1 — time-above inflated by sampling gaps. `aggregate()` multiplied the
+count of above-threshold samples by the *chart's display bucket* (60 s on 24 h,
+900 s on 7 d), not the sampling cadence. A gap between samples therefore
+invented time without bound: 20 above-threshold samples ten minutes apart
+reported 651.6 s "above" over a 619 s span — 105% of the whole range, ~60x the
+real elapsed time. The product is now `count x interval_s` (the nominal
+`telemetry.sample_interval_ms`), capped by the span between the first and last
+in-range sample, so no gap can manufacture time; with no nominal cadence the
+observed mean spacing is the fallback.
+
+Defect 2 — export/history paging dropped rows. `iter_range()` used a strict
+`ts > cursor`, so the row exactly at `since` was skipped, and a `ts`-only cursor
+could skip or repeat rows that shared a timestamp at a page boundary. It now
+keys on the row value `(ts, id)` with a strict `(ts, id) > (cursor)` seeded at
+`(since, -1)` — lower bound inclusive, ties never lost. Row-value keyset also
+lets SQLite walk `idx_snapshots_ts` directly instead of building a temp B-tree
+sort per page.
+
+Evidence:
+
+- `tests/integration/test_history_audit.py` (new) checks the bucketed series and
+  the summary against an independent loop oracle on regular, irregular and gapped
+  data; inclusive boundaries; empty and single-sample ranges; naive vs aware
+  timestamps; gap inflation; pagination duplicates; and a meta-test proving the
+  newest-data guard rejects a capped-prefix implementation.
+- `tests/integration/test_services.py` exports 120 000 rows (crossing the old
+  100 000 cap) and asserts every row is present, ordered and unique; a
+  fault-injection test proves a mid-write `OSError` leaves no partial file and is
+  recorded as an error.
+- Streaming memory is bounded by the page size, not the row count: 200 000 rows
+  peak at 4.45 MB via `iter_range` vs 88.25 MB materialised (19.9x less), and
+  1 000 000 rows at `page=5000` stay at 4.45 MB.
+
+History view performance (AD-7): the worst case — a cold week-view open on a
+database at its 2M-row retention cap — is ~0.5 s; the hour view is 4 ms. A
+covering index (~14%), a larger page cache (no effect) and a single grouped scan
+(1.07x, slower on the hour view) were each measured and rejected, so the simple
+pair of queries is kept. The single-scan experiment was reverted.
+
+Quality gates: `ruff` clean, `mypy` clean (95 files), `pytest` 400 passed.
