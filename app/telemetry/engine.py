@@ -71,11 +71,16 @@ class TelemetryEngine:
         *,
         history_size: int = DEFAULT_HISTORY,
         persist_queue_size: int = 4096,
+        rapid_rise_c_per_min: float | None = None,
+        sensor_stale_after_s: float = 5.0,
     ) -> None:
         self._registry = registry
         self._bus = bus
         self._normaliser = normaliser or SensorNormaliser()
-        self._analyser = analyser or ThermalAnalyser()
+        self._analyser = analyser or ThermalAnalyser(
+            rapid_rise_c_per_min=rapid_rise_c_per_min,
+            sensor_stale_after_s=sensor_stale_after_s,
+        )
         self._history: RingBuffer[TelemetrySnapshot] = RingBuffer(history_size)
         self._persist_queue: DropOldestQueue[TelemetrySnapshot] = DropOldestQueue(
             persist_queue_size

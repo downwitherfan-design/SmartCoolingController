@@ -109,7 +109,7 @@ class ExportService:
         fmt: ExportFormat = ExportFormat.CSV,
         name: str | None = None,
     ) -> ExportResult:
-        rows = self._snapshots.range(since, until)
+        rows = self._snapshots.iter_range(since, until)
         return self._write(
             rows,
             fmt=fmt,

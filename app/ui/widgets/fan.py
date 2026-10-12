@@ -20,7 +20,7 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 from app.core.enums import FanResponseState, FanState
 from app.ui.design import TYPE, Theme
 from app.ui.i18n import Translator
-from app.ui.widgets.base import ThemedWidget, draw_glow
+from app.ui.widgets.base import ThemedWidget, draw_fitted_text, draw_glow
 
 
 class FanVisualizer(ThemedWidget):
@@ -162,17 +162,27 @@ class FanVisualizer(ThemedWidget):
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
         painter.setPen(QColor(self.theme.palette.text) if self._rpm is not None else QColor(self.theme.palette.text_faint))
-        text_rect = QRectF(center.x() - hub, center.y() - 12, hub * 2, 18)
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, main)
+        # The unavailable message is a sentence, so it wraps and is fitted to the
+        # hub box instead of overflowing the blades it used to be clipped by.
+        box_w = min(radius * 1.5, hub * 2.8)
+        box_h = max(hub * 2.4, radius * 0.5)
+        draw_fitted_text(
+            painter,
+            main,
+            QRectF(center.x() - box_w / 2, center.y() - box_h / 2, box_w, box_h),
+            Qt.AlignmentFlag.AlignCenter,
+            wrap=True,
+        )
         if self._rpm is not None:
             unit_font = QFont(self.font())
             unit_font.setPointSizeF(TYPE["caption"] - 1)
             painter.setFont(unit_font)
             painter.setPen(QColor(self.theme.palette.text_muted))
-            painter.drawText(
+            draw_fitted_text(
+                painter,
+                self.tr_.t("unit.rpm"),
                 QRectF(center.x() - hub, center.y() + 3, hub * 2, 14),
                 Qt.AlignmentFlag.AlignCenter,
-                self.tr_.t("unit.rpm"),
             )
 
     def apply_theme(self) -> None:
@@ -236,14 +246,20 @@ class FanReadout(ThemedWidget):
         head_font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(head_font)
         painter.setPen(self.theme.fan_color(self._state))
-        painter.drawText(
+        draw_fitted_text(
+            painter,
+            state_text,
             QRectF(padding, 0, rect.width() - padding * 2, 24),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            state_text,
         )
 
         if self._rows:
             row_height = (rect.height() - 28) / len(self._rows)
+            inner = rect.width() - padding * 2
+            # Labels and values share the row: give each half so a long label
+            # cannot paint underneath a right-aligned value.
+            label_w = inner * 0.58
+            value_w = inner - label_w
             label_font = QFont(self.font())
             label_font.setPointSizeF(TYPE["small"])
             value_font = QFont(self.font())
@@ -251,19 +267,21 @@ class FanReadout(ThemedWidget):
             value_font.setWeight(QFont.Weight.DemiBold)
             for index, (label, value, tone) in enumerate(self._rows):
                 top = 26 + index * row_height
-                painter.setFont(label_font)
                 painter.setPen(QColor(self.theme.palette.text_muted))
-                painter.drawText(
-                    QRectF(padding, top, rect.width() - padding * 2, row_height),
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                painter.setFont(label_font)
+                draw_fitted_text(
+                    painter,
                     label,
+                    QRectF(padding, top, label_w, row_height),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 )
-                painter.setFont(value_font)
                 painter.setPen(self.color(tone))
-                painter.drawText(
-                    QRectF(padding, top, rect.width() - padding * 2, row_height),
-                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                painter.setFont(value_font)
+                draw_fitted_text(
+                    painter,
                     value,
+                    QRectF(padding + label_w, top, value_w, row_height),
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 )
         painter.end()
 

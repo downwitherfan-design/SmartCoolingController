@@ -392,27 +392,6 @@ class SettingsPage(Page):
             self._switch(config.show_glow, self._on_glow),
         )
 
-        preset = SettingsCombo(
-            [
-                (self.tr_.t("settings.preset.standard"), "standard"),
-                (self.tr_.t("settings.preset.minimal"), "minimal"),
-                (self.tr_.t("settings.preset.power"), "power"),
-            ],
-            current=config.dashboard_preset,
-        )
-        preset.changed.connect(lambda v: self._store("appearance", dashboard_preset=v))
-        self._row(card, "settings.dashboard_preset", preset)
-
-        view = SettingsCombo(
-            [
-                (self.tr_.t("settings.view.simple"), "simple"),
-                (self.tr_.t("settings.view.advanced"), "advanced"),
-            ],
-            current=config.view_mode,
-        )
-        view.changed.connect(lambda v: self._store("appearance", view_mode=v))
-        self._row(card, "settings.view_mode", view)
-
         opacity = SettingsSlider(minimum=0.4, maximum=1.0, step=0.02, value=config.compact_opacity, decimals=2)
         opacity.changed.connect(lambda v: self._store("appearance", compact_opacity=float(v)))
         self._row(card, "settings.compact_opacity", opacity)

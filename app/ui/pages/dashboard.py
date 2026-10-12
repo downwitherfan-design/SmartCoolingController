@@ -129,10 +129,13 @@ class DashboardPage(ScrollPage):
                 ("m15", self.tr_.t("history.range.m15")),
             ],
             capacity=3600,
+            series_visibility=self.services.config.charts.series_visibility,
         )
         self.chart_panel.add_series("cpu", self.tr_.t("dash.cpu"), unit="°C", color_index=0)
         self.chart_panel.add_series("gpu", self.tr_.t("dash.gpu"), unit="°C", color_index=1)
         self.chart_panel.add_series("fan", self.tr_.t("dash.fan_pwm"), unit="%", color_index=2)
+        self._apply_chart_settings()
+        self.chart_panel.series_visibility_changed.connect(self._on_series_visibility)
         self.chart_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.chart_panel.setMinimumHeight(320)
         row.addWidget(self.chart_panel, 7)
@@ -188,6 +191,17 @@ class DashboardPage(ScrollPage):
         self.body.addStretch(1)
 
     # -- data --------------------------------------------------------------
+
+    def _apply_chart_settings(self) -> None:
+        chart = self.services.config.charts
+        self.chart_panel.apply_display_settings(
+            auto_scale=chart.auto_scale, show_grid=chart.show_grid, show_legend=chart.show_legend
+        )
+
+    def _on_series_visibility(self, key: str, visible: bool) -> None:
+        state = dict(self.services.config.charts.series_visibility)
+        state[key] = visible
+        self.services.update_config(charts={"series_visibility": state})
 
     def refresh(self, snapshot: TelemetrySnapshot) -> None:
         cpu = snapshot.cpu

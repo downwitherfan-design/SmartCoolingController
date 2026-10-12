@@ -52,7 +52,6 @@ class GeneralSettings(_Model):
 class TelemetrySettings(_Model):
     sample_interval_ms: int = 500
     ui_update_interval_ms: int = 500
-    sensor_refresh_interval_s: int = 300
     record_history: bool = True
     persist_interval_s: int = 5
     stale_after_s: float = 5.0
@@ -183,11 +182,7 @@ class AppearanceSettings(_Model):
     compact_always_on_top: bool = True
     compact_position_locked: bool = False
     compact_position: list[int] = Field(default_factory=list)
-    dashboard_preset: str = "standard"
-    hidden_cards: list[str] = Field(default_factory=list)
-    card_order: list[str] = Field(default_factory=list)
     favorite_metrics: list[str] = Field(default_factory=list)
-    view_mode: str = "simple"
 
 
 class LocalizationSettings(_Model):

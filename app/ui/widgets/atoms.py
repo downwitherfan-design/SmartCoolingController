@@ -13,7 +13,7 @@ Accessibility notes (spec §130):
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QFrame,
@@ -35,7 +35,7 @@ from app.models.sensors import SensorDescriptor
 from app.ui.design import SPACE, TYPE, Theme
 from app.ui.i18n import Translator
 from app.ui.icons import make_icon, paint_icon
-from app.ui.widgets.base import ThemedWidget
+from app.ui.widgets.base import ThemedWidget, draw_fitted_text
 
 
 def _label(text: str, role: str = "body", parent: QWidget | None = None) -> QLabel:
@@ -128,10 +128,12 @@ class SectionHeader(QWidget):
         self.subtitle.setMinimumWidth(1)
         self.subtitle.setVisible(bool(subtitle))
         text_col.addWidget(self.subtitle)
-        layout.addLayout(text_col)
-        layout.addStretch(1)
+        # The text column must own the row's spare width: a trailing
+        # ``addStretch`` used to swallow it, leaving the title a few dozen
+        # pixels inside a wide card and forcing it to wrap or clip.
+        layout.addLayout(text_col, 1)
         if trailing is not None:
-            layout.addWidget(trailing)
+            layout.addWidget(trailing, 0)
 
     def set_text(self, title: str, subtitle: str = "") -> None:
         self.title.setText(title)
@@ -218,10 +220,11 @@ class StatusBadge(ThemedWidget):
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
         painter.setPen(color)
-        painter.drawText(
-            rect.adjusted(text_x - rect.left(), 0, -10, 0),
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+        draw_fitted_text(
+            painter,
             self._text,
+            QRectF(rect.adjusted(text_x - rect.left(), 0, -10, 0)),
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
         )
         painter.end()
 
@@ -365,6 +368,7 @@ class MetricCard(ThemedWidget):
         head.addWidget(self.badge)
         self.pin_button = QPushButton()
         self.pin_button.setProperty("variant", "ghost")
+        self.pin_button.setProperty("iconOnly", "true")
         self.pin_button.setFixedSize(24, 24)
         self.pin_button.setCheckable(True)
         self.pin_button.setToolTip(translator.t("sensors.pin"))
@@ -374,12 +378,17 @@ class MetricCard(ThemedWidget):
 
         self.value_label = _label("—", "display")
         self.value_label.setMinimumHeight(42)
+        # Values can be compound ("2.7 / 15.6 GB"); wrap rather than hard-clip
+        # so no digit is ever lost in a narrow tile.
+        self.value_label.setWordWrap(True)
         layout.addWidget(self.value_label)
 
         self.footer = QHBoxLayout()
         self.footer.setSpacing(SPACE["sm"])
-        self.subtitle_label = _label("", "caption")
-        self.footer.addWidget(self.subtitle_label)
+        # The subtitle carries hardware names ("Simulated NVMe"), which are not
+        # predictable at build time; elide with a tooltip instead of clipping.
+        self.subtitle_label = ElidedLabel("", "caption")
+        self.footer.addWidget(self.subtitle_label, 1)
         self.footer.addStretch(1)
         self.unit_label = _label(unit, "caption")
         self.footer.addWidget(self.unit_label)
@@ -452,8 +461,11 @@ class KeyValueRow(QWidget):
         layout.setContentsMargins(0, 3, 0, 3)
         layout.setSpacing(SPACE["md"])
         self.key_label = _label(key, "muted")
-        self.key_label.setMinimumWidth(120)
-        layout.addWidget(self.key_label)
+        # Let the key take its natural width; a fixed 120px floor used to clip
+        # longer keys ("Consecutive failures", "Database path").  The stretch
+        # keeps the value right-aligned without squeezing the key.
+        self.key_label.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.key_label, 0)
         layout.addStretch(1)
         self.value_label = ElidedLabel(value, "mono" if mono else "body")
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -521,6 +533,7 @@ class SensorRow(QWidget):
 
         self.favorite_button = QPushButton()
         self.favorite_button.setProperty("variant", "ghost")
+        self.favorite_button.setProperty("iconOnly", "true")
         self.favorite_button.setCheckable(True)
         self.favorite_button.setChecked(favorite)
         self.favorite_button.setFixedSize(26, 26)

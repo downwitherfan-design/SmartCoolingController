@@ -45,6 +45,30 @@ Verify a download before running it with
 `Get-FileHash <file> -Algorithm SHA256` and compare against `checksums.sha256`
 on the release page.
 
+### Run it on Windows (step by step)
+
+Installer:
+
+1. Download `SmartCoolingController-<version>-setup.exe` from the link above.
+2. Double-click it. Windows SmartScreen may warn about an unknown publisher
+   because the build is not code-signed — choose **More info → Run anyway**.
+3. Follow the wizard. It installs per-user (no administrator rights) under
+   `%LOCALAPPDATA%\Programs\SmartCooling Controller`.
+4. Launch from the Start-menu entry **SmartCooling Controller**. The first run
+   shows a short setup wizard; pick **Simulated** hardware if no ESP32 pad is
+   attached, then connect the pad later from the **ESP32** page.
+
+Portable build:
+
+1. Download `SmartCoolingController-<version>-windows-x86_64.zip`.
+2. Right-click → **Extract All** (running the `.exe` from inside the zip will
+   not work).
+3. Run `SmartCoolingController.exe` from the extracted folder.
+
+To remove the installed build, use **Settings → Apps → SmartCooling Controller →
+Uninstall** (data under `%LOCALAPPDATA%\SmartCooling\Data` is kept; delete it by
+hand for a clean slate).
+
 ## Requirements
 
 - Windows 10/11 (the app also runs head-less on Linux for CI and packaging).

@@ -67,6 +67,30 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _installer_checksum_lines(installer: Path | None) -> list[str]:
+    """Return the ``checksums.sha256`` line(s) for the Windows installer.
+
+    Kept as a pure function so the release-integrity invariant is directly
+    testable: when an installer exists it **must** appear in the checksums file,
+    because ``RELEASE_NOTES.md`` tells the user to verify the downloaded
+    ``setup.exe`` against exactly that file.
+    """
+    if installer is None or not installer.is_file():
+        return []
+    return [f"{sha256(installer)}  {installer.name}"]
+
+
+def _find_installer(version: str) -> Path | None:
+    """Locate the built installer for ``version`` in ``build/installer/``."""
+    candidates = sorted((BUILD / "installer").glob("SmartCoolingController-*-setup.exe"))
+    if not candidates:
+        return None
+    for path in candidates:
+        if f"-{version}-setup.exe" in path.name:
+            return path
+    return candidates[-1]
+
+
 def _excluded(relative: Path) -> bool:
     if relative.parts and relative.parts[0] in _ROOT_EXCLUDES:
         return True
@@ -317,6 +341,21 @@ def main(argv: list[str] | None = None) -> int:
         if origin.is_file() and origin.stat().st_size > 0:
             shutil.copy2(origin, DELIVERY / name)
             print(f"      {name}")
+
+    # The Windows installer is produced by build_installer.py into
+    # build/installer/.  It is part of the delivery, so it must be listed in
+    # checksums.sha256 — RELEASE_NOTES.md tells the user to verify the
+    # setup.exe against exactly that file.  Copy it in (and hash it) when it
+    # exists; on a machine without Inno Setup the step is simply skipped.
+    installer = _find_installer(info.version)
+    if installer is not None:
+        shutil.copy2(installer, DELIVERY / installer.name)
+        installer_lines = _installer_checksum_lines(DELIVERY / installer.name)
+        print(f"      {installer.name}")
+    else:
+        installer_lines = []
+        print("      (no installer present — checksums.sha256 will not list one)")
+
     guide = DELIVERY / "INSTALL.md"
     guide.write_text(_install_guide(info.version, info.build_id, bundle_zip.name), encoding="utf-8")
     print(f"      {guide.name}")
@@ -332,6 +371,9 @@ def main(argv: list[str] | None = None) -> int:
             seen.add(path)
             ordered.append(path)
     lines = [f"{sha256(path)}  {path.name}" for path in ordered]
+    # The installer lines are appended from the dedicated helper so the
+    # "installer is always checksummed" invariant has exactly one definition.
+    lines.extend(installer_lines)
     checksums = DELIVERY / "checksums.sha256"
     checksums.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"      {checksums.name}  ({len(lines)} entries)")

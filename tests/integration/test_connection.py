@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import timedelta
 
 import pytest
 
+from app.core.clock import utc_now
 from app.core.enums import ConnectionState
 from app.core.events import EventBus
 from app.network.connection import ConnectionManager
@@ -160,6 +162,56 @@ def test_latency_is_measured_only_from_a_heartbeat_answer(manager: ConnectionMan
     assert 0 <= manager.status.latency_ms < 1000
 
 
+def test_stop_interrupts_a_long_reconnect_backoff(bus: EventBus) -> None:
+    """``stop()`` must not block for the whole backoff (it runs on the GUI thread).
+
+    With the shipped 30 s top of the backoff schedule, an uninterruptible sleep
+    would freeze shutdown for up to half a minute.  The loop must react to the
+    stop signal within roughly one event-loop turn.
+    """
+    mgr = ConnectionManager(
+        bus,
+        use_websocket=True,
+        heartbeat_interval_s=0.1,
+        heartbeat_timeout_s=0.3,
+        connect_timeout_s=0.5,
+        backoff_schedule=[5.0],  # a deliberately long wait to be interrupted
+        reconnect_jitter=0.0,
+        healthy_reset_s=0.05,
+    )
+    try:
+        device = mgr.enable_mock(host="127.0.0.1", port=8823)
+        mgr.connect_device(device)
+        # Wait until the loop has entered the backoff (state RECONNECTING), then
+        # kill the mock so the next attempt fails and the loop parks in _wait().
+        assert _wait_for(lambda: mgr.state is ConnectionState.CONNECTED, timeout=3.0)
+        mock = mgr._mock
+        assert mock is not None
+        mgr._stop_mock(mock)
+        assert _wait_for(lambda: mgr.state is ConnectionState.RECONNECTING, timeout=4.0)
+
+        start = time.monotonic()
+        mgr.stop(timeout=5.0)
+        elapsed = time.monotonic() - start
+        assert elapsed < 1.0, f"stop() blocked for {elapsed:.2f}s in the backoff wait"
+    finally:
+        mgr.stop(timeout=5.0)
+
+
+def test_stop_interrupts_the_idle_poll_wait(bus: EventBus) -> None:
+    """An idle (never-connected) loop must stop promptly, not after the poll tick."""
+    mgr = ConnectionManager(bus, use_websocket=True, backoff_schedule=[0.05])
+    try:
+        mgr.start()
+        assert _wait_for(lambda: mgr._loop is not None and mgr._loop.is_running(), timeout=3.0)
+        time.sleep(0.05)  # let the loop reach its idle wait
+        start = time.monotonic()
+        mgr.stop(timeout=5.0)
+        assert (time.monotonic() - start) < 1.0
+    finally:
+        mgr.stop(timeout=5.0)
+
+
 def test_malformed_frames_degrade_but_do_not_disconnect(manager: ConnectionManager) -> None:
     device, _mock = _start_mock(manager, port=8819, malformed_every=3)
     manager.connect_device(device)
@@ -228,3 +280,48 @@ def test_no_session_leak_across_repeated_cycles(bus: EventBus) -> None:
         # After stop the mock socket is released.
         assert mock is not None
         assert not mock.has_listener
+
+
+def test_stale_window_is_configurable_not_hardcoded(bus: EventBus) -> None:
+    """The stale/degraded thresholds must follow the user's setting.
+
+    They used to be module constants (4.0 s / 2.0 s) that ignored
+    ``telemetry.stale_after_s`` entirely, so the settings slider did nothing.
+    This drives the real liveness check at the boundary to prove the window
+    now scales with the configured value.
+    """
+    mgr = ConnectionManager(
+        bus,
+        use_websocket=False,
+        heartbeat_interval_s=1.0,
+        heartbeat_timeout_s=3.0,
+        connect_timeout_s=1.0,
+        stale_after_s=10.0,
+    )
+    try:
+        assert mgr.stale_after_s == 10.0
+        assert mgr.degraded_after_s == 5.0
+        # Shrinking the window takes effect immediately and keeps the ordering.
+        mgr.set_stale_after_s(3.0)
+        assert mgr.degraded_after_s == 1.5
+
+        # An absurd value is clamped so the two thresholds never invert.
+        mgr.set_stale_after_s(-5.0)
+        assert mgr.stale_after_s >= mgr.degraded_after_s > 0.0
+
+        # Drive the real liveness transition with a 4 s old packet against a
+        # 6 s window: late enough to degrade, not yet stale.
+        mgr.set_stale_after_s(6.0)
+        mgr._set_state(ConnectionState.CONNECTING, epoch=mgr._epoch)
+        mgr._set_state(ConnectionState.CONNECTED, epoch=mgr._epoch)
+        mgr._status.last_packet_at = utc_now() - timedelta(seconds=4.0)
+        mgr._check_stale(mgr._epoch)
+        assert mgr.state is ConnectionState.DEGRADED
+
+        # Past the whole window it becomes stale.
+        mgr._status.last_packet_at = utc_now() - timedelta(seconds=7.0)
+        mgr._check_stale(mgr._epoch)
+        assert mgr.state is ConnectionState.STALE
+    finally:
+        mgr.stop(timeout=2.0)
+

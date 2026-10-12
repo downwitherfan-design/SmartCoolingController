@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from app.ui.design import TYPE, Theme
 from app.ui.i18n import Translator
+from app.ui.widgets.atoms import ElidedLabel
 from app.ui.widgets.base import ThemedWidget, qcolor
 
 
@@ -74,9 +75,12 @@ class LiveChart(ThemedWidget):
         self._marker_items: list[pg.InfiniteLine] = []
         self._paused = False
         self._auto_scale = True
+        self._show_grid = True
+        self._legend_visible = True
         self._legend: pg.LegendItem | None = None
+        self._lightweight = theme.lightweight
 
-        pg.setConfigOptions(antialias=True)
+        pg.setConfigOptions(antialias=not self._lightweight)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -126,6 +130,10 @@ class LiveChart(ThemedWidget):
         self._series[key] = series
         pen = pg.mkPen(qcolor(self.theme.series_color(index)), width=2)
         curve = self.plot.plot([], [], pen=pen, name=label)
+        # In lightweight mode draw only the samples inside the visible range
+        # and decimate them, so a long-running trace stays cheap to repaint.
+        curve.setClipToView(self._lightweight)
+        curve.setDownsampling(auto=self._lightweight, method="peak")
         self._curves[key] = curve
         self._data[key] = ([], [])
 
@@ -183,6 +191,15 @@ class LiveChart(ThemedWidget):
         self._auto_scale = enabled
         self.plot.enableAutoRange(y=enabled)
 
+    def set_grid_visible(self, enabled: bool) -> None:
+        self._show_grid = enabled
+        self.plot.showGrid(x=enabled, y=enabled, alpha=0.15)
+
+    def set_legend_visible(self, enabled: bool) -> None:
+        self._legend_visible = enabled
+        if self._legend is not None:
+            self._legend.setVisible(enabled)
+
     # -- markers -----------------------------------------------------------
 
     def add_marker(self, marker: EventMarker) -> None:
@@ -238,6 +255,15 @@ class LiveChart(ThemedWidget):
         self._tooltip.setVisible(True)
 
     def apply_theme(self) -> None:
+        # Switching performance mode rebuilds the pages, but a chart can also
+        # be restyled in place, so keep its render fidelity in sync here.
+        lightweight = self.theme.lightweight
+        if lightweight != self._lightweight:
+            self._lightweight = lightweight
+            pg.setConfigOptions(antialias=not lightweight)
+            for curve in self._curves.values():
+                curve.setClipToView(lightweight)
+                curve.setDownsampling(auto=lightweight, method="peak")
         self.plot.setBackground(qcolor(self.theme.palette.surface))
         for key, series in self._series.items():
             curve = self._curves.get(key)
@@ -260,6 +286,9 @@ class LiveChart(ThemedWidget):
 class ChartPanel(ThemedWidget):
     """A chart with a title, range selector, stats and a pause toggle."""
 
+    #: Emitted when the user toggles a series, so a page can persist the choice.
+    series_visibility_changed = Signal(str, bool)
+
     def __init__(
         self,
         theme: Theme,
@@ -268,9 +297,13 @@ class ChartPanel(ThemedWidget):
         title: str = "",
         ranges: list[tuple[str, str]] | None = None,
         capacity: int = 3600,
+        series_visibility: dict[str, bool] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(theme, translator, parent)
+        #: Which series start hidden.  Seeded from the persisted setting so the
+        #: user's chart choices survive a restart instead of being cosmetic.
+        self._series_visibility: dict[str, bool] = dict(series_visibility or {})
         self.setObjectName("card")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -278,10 +311,10 @@ class ChartPanel(ThemedWidget):
 
         header = QHBoxLayout()
         header.setSpacing(8)
-        self.title_label = QLabel(title)
-        self.title_label.setProperty("role", "heading")
-        header.addWidget(self.title_label)
-        header.addStretch(1)
+        # The title yields to the stats readout and elides when the panel is
+        # narrow, instead of hard-clipping mid-word.
+        self.title_label = ElidedLabel(title, "heading")
+        header.addWidget(self.title_label, 1)
 
         self.stats_label = QLabel("")
         self.stats_label.setProperty("role", "mono")
@@ -289,6 +322,7 @@ class ChartPanel(ThemedWidget):
 
         self.pause_button = QPushButton()
         self.pause_button.setProperty("variant", "quiet")
+        self.pause_button.setProperty("iconOnly", "true")
         self.pause_button.setCheckable(True)
         self.pause_button.setToolTip(translator.t("common.pause"))
         self.pause_button.setFixedSize(40, 26)
@@ -325,13 +359,29 @@ class ChartPanel(ThemedWidget):
         button = QPushButton(label)
         button.setProperty("segmented", "true")
         button.setCheckable(True)
-        button.setChecked(True)
+        # Default to visible unless the persisted setting says otherwise.
+        visible = self._series_visibility.get(key, True)
+        button.setChecked(visible)
         button.setProperty("variant", "quiet")
-        button.toggled.connect(lambda checked, k=key: self.chart.set_series_visible(k, checked))
+        self.chart.set_series_visible(key, visible)
+        button.toggled.connect(lambda checked, k=key: self._on_series_toggled(k, checked))
         color = self.theme.series_color(color_index if color_index is not None else len(self._series_buttons))
         button.setStyleSheet(f"QPushButton:checked {{ color: {color}; border-color: {color}; }}")
         self.series_bar.addWidget(button)
         self._series_buttons[key] = button
+
+    def _on_series_toggled(self, key: str, visible: bool) -> None:
+        self.chart.set_series_visible(key, visible)
+        self._series_visibility[key] = visible
+        self.series_visibility_changed.emit(key, visible)
+
+    def apply_display_settings(
+        self, *, auto_scale: bool = True, show_grid: bool = True, show_legend: bool = True
+    ) -> None:
+        """Apply the persisted chart-display preferences to the live plot."""
+        self.chart.set_auto_scale(auto_scale)
+        self.chart.set_grid_visible(show_grid)
+        self.chart.set_legend_visible(show_legend)
 
     def _select_range(self, key: str) -> None:
         for name, button in self._range_buttons.items():

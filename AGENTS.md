@@ -229,3 +229,128 @@ python -m pip wheel --no-deps -w /tmp/wheelout .       # packaging check
   error-placeholder page. A new page that raises during `build()` fails here.
 - `redact_text` and the diagram/animation state mapping are the two places where
   "looks right" is not good enough — both have focused tests; extend them.
+
+## V2.1 audit invariants
+
+- **Safety overrides bypass the profile envelope.** SAFE mode and an
+  over-temperature response are limited only by the absolute `[0, 100]` range,
+  never by `profile.max_pwm`. `_clamp_and_emit(safety_override=True)` enforces
+  this; `tests/unit/test_cooling_controller.py` guards it. A profile must never
+  be able to cap an emergency.
+- **The controller's output must actually reach the fan.** There are two
+  channels: a `setPwm` *command* overrides firmware authority, while the
+  `recommendedPwm` value in the *telemetry* packet is followed only while the
+  firmware stays in AUTO. So: ordinary AUTO advertises `recommended_pwm()` in
+  the telemetry payload (wired in `ApplicationServices._telemetry_supplier`);
+  SAFE, manual and the critical-temperature override take authority with
+  `_force_manual()` (`setPwm`), and after the emergency clears
+  `_restore_firmware_auto()` returns authority once with `setMode AUTO`. Both
+  directions have focused tests — do not reintroduce a mode-guarded `_apply`
+  that silences the override (it shipped once and no fan ever moved).
+- **Every released artefact is in `checksums.sha256`.** `deliver.py` appends the
+  installer digest and the Windows workflow fails the release if it is missing,
+  because `RELEASE_NOTES.md` tells the user to verify against that file.
+- **Translation catalogues stay symmetric.** `tests/unit/test_i18n.py` fails if
+  EN/FA diverge or if a `ConnectionState`/`HealthStatus`/schematic field lacks a
+  key. Add strings to both catalogues, never one.
+- **`Translator` coerces its language.** Callers pass `"en"`/`"fa"` strings;
+  `_coerce_language` normalises them so identity checks for RTL and Persian
+  digits work. Never compare `self._language` to a raw string.
+- **Redaction is a security boundary.** `redact_text` must catch quoted
+  (`"token": "…"`), unquoted and PEM-shaped secrets; `redact()` in
+  `app/services/health.py` applies the text rules to string values so support
+  bundles (which are shared publicly) cannot leak a credential hidden in a log
+  line.
+- **No setting may be a silent no-op.** A config field that persists (and
+  especially one shown as a control in Settings) with no reader is a lie about
+  the app's capabilities. `tests/unit/test_config.py` guards the V2.1 removals:
+  `telemetry.sensor_refresh_interval_s` and `appearance.{dashboard_preset,
+  view_mode, hidden_cards, card_order}` must stay gone. Do not wire
+  `sensor_refresh_interval_s` as a read-throttle — the engine reads every sample
+  for live telemetry and LHM refreshes inside `read()`; throttling it would
+  freeze CPU/GPU temperatures. `_Model` sets `extra="ignore"`, so a settings
+  file written by an older build still loads.
+
+## V2.2 invariants
+
+- **One live anomaly path.** `ThermalAnalyser._detect_anomalies` is the only
+  detector the running app uses; `app/analytics/anomaly.py::AnomalyDetector` is
+  a tested *reference* and must not be wired into the engine (see AD-2 in
+  `docs/V2_2_ARCHITECTURE_DECISIONS.md`). Wiring it would duplicate state and
+  publish on a topic the shell does not subscribe to.
+- **The sensor-dropout grace window is `telemetry.stale_after_s`.** The live
+  analyser reports `SENSOR_DISAPPEARED` only after a tracked sensor has been
+  absent for that long (measured from its last good reading). Keep the
+  constructor argument and the `update_config()` push in `app/services` in step
+  — `tests/integration/test_services.py` pins both.
+- **Liveness thresholds scale with the setting.** `ConnectionManager`'s stale
+  and degraded windows derive from `telemetry.stale_after_s`
+  (`set_stale_after_s`, degraded = stale / 2); do not reintroduce module
+  constants.
+- **`PerformanceMode.LIGHTWEIGHT` is load-bearing.** It must reduce motion
+  (`build_theme`) and chart cost (`LiveChart` clip + auto peak downsampling);
+  `tests/ui/test_charts.py` fails if either is dropped.
+
+## V2.2 history / export data-path invariants
+
+- **The pagination cursor is the row value `(ts, id)`, not `ts`.** `SnapshotRepository.iter_range`
+  uses `WHERE (ts, id) > (cursor)` seeded at `(since, -1)`, so the lower bound is inclusive
+  (a strict `ts > since` dropped the row exactly at `since`) and rows that share a timestamp
+  at a page boundary are neither lost nor repeated. `id` is the `INTEGER PRIMARY KEY`. A
+  `ts`-only cursor re-introduces the tie bug; a row-value comparison also lets SQLite walk
+  `idx_snapshots_ts` without a temp B-tree sort. `tests/integration/test_history_audit.py`
+  and `test_history_range.py` guard all of this.
+- **Time-above uses the sampling cadence, never the display bucket.** `aggregate()` and the
+  page fallback `_summarise()` take `interval_s` = `telemetry.sample_interval_ms / 1000` and
+  compute `time_above_s = min(span, count x interval_s)`. Passing the chart bucket (60 s / 900 s)
+  inflated the figure by up to ~60x on a gappy range — 20 samples ten minutes apart read
+  105% of the whole span. The span cap makes a gap unable to manufacture time. The `history`
+  page and `scripts/diagnostics/history_probe.py` must keep passing `interval_s`.
+- **Exports stream and never silently truncate.** `ExportService.export_range` consumes
+  `iter_range`; do not reintroduce `snapshots.range(limit=...)`, whose default cap dropped the
+  newest rows of a wide export (AD-6). `_write` writes a `.part` file and atomically replaces
+  the target only on success, so a failed export leaves no partial file and is recorded with
+  an `error` status.
+- **History aggregation stays synchronous; measure before optimizing.** The worst case — a
+  cold week-view open on a database at its 2M-row cap — is ~0.5 s; the hour view is 4 ms. A
+  covering index (~14%), a larger page cache (no effect) and a single grouped scan (1.07x,
+  slower on the hour view) were each measured and rejected (AD-7). Any future change to this
+  path must come with a measurement; an optimization that does not measurably help is reverted.
+- **The audit suite is the oracle.** `tests/integration/test_history_audit.py` checks the
+  series and summary against an independent loop implementation on regular, irregular and
+  gapped data, plus boundaries, pagination ties and gap inflation. Run it (and
+  `test_services.py -k export`) before touching the history/export path.
+
+## GUI correctness gate
+
+`app/ui/layout_check.py::find_layout_problems` is the single definition of a
+correctly-laid-out widget tree; both the UI test-suite and the head-less audit
+use it. Run the gate off-screen before shipping UI changes:
+
+```bash
+QT_QPA_PLATFORM=offscreen python scripts/diagnostics/gui_audit.py   # exits non-zero on defects
+```
+
+**Custom-painted text is covered too.** `find_layout_problems` only sees QLabel
+geometry, so a gauge, the schematic or the fan could paint text straight over
+their own edge unnoticed. `find_painted_text_problems` renders the widget
+through a `QPainter` subclass that records every `drawText` whose ink or wrapped
+height exceeds its box; the audit calls both. Never size painted text with magic
+pixel rects — use `app/ui/widgets/base.py::draw_fitted_text`, which shrinks to
+`min_scale` then elides, and keeps the run inside its box in every language.
+`tests/ui/test_painted_text.py` fails if a widget overflows, and includes a
+self-check that the detector actually bites.
+
+## GitHub push credential
+
+The owner's `GITHUB_TOKEN` env var is read-only for this repo (fine-grained,
+contents:read) and returns 403 on push. Use the write-capable token stored
+outside version control at `~/.openhands/gh_agent_token` (mode 600) for all
+push/release work on this project:
+
+```bash
+TOKEN=$(cat ~/.openhands/gh_agent_token)
+git remote set-url origin "https://x-access-token:${TOKEN}@github.com/downwitherfan-design/SmartCoolingController.git"
+git push origin <branch>
+git remote set-url origin "https://github.com/downwitherfan-design/SmartCoolingController.git"
+```

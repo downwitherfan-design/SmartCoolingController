@@ -36,11 +36,13 @@ from PySide6.QtWidgets import (
 )
 
 from app import APP_NAME
-from app.core.enums import ConnectionState, Language, PerformanceMode
+from app.application.health_worker import HealthCheckWorker
+from app.core.enums import ConnectionState, HealthStatus, Language, PerformanceMode
 from app.core.events import Event
 from app.models.telemetry import TelemetrySnapshot
 from app.network.connection import TOPIC_STATE as TOPIC_CONNECTION
-from app.services.alerts import TOPIC_ALERT, TOPIC_ALERT_CLEARED
+from app.services import TOPIC_DISCOVERY
+from app.services.alerts import TOPIC_ALERT, TOPIC_ALERT_CLEARED, TOPIC_NOTIFY
 from app.services.cooling_control import TOPIC_MODE
 from app.services.health import TOPIC_HEALTH
 from app.services.sessions import TOPIC_SESSIONS
@@ -87,6 +89,11 @@ PAGE_CLASSES: dict[str, type[Page]] = {
     "data": DataPage,
     "about": AboutPage,
 }
+
+#: How often subsystem health is recomputed while the app is running.  Slow
+#: enough to be invisible in CPU, fast enough that a failing fan or database is
+#: noticed without opening the Diagnostics page.
+HEALTH_INTERVAL_MS = 5000
 
 _SHORTCUTS: tuple[tuple[str, str, str], ...] = (
     ("Ctrl+K", "shortcut.palette", "palette"),
@@ -142,6 +149,21 @@ class MainWindow(QMainWindow):
         self._clock.timeout.connect(self._tick_status)
         self._clock.start()
 
+        # Subsystem health used to be computed only when the Diagnostics page
+        # was opened, so the rail badge and dashboard health card went stale for
+        # the rest of the session.  A dedicated, slower timer keeps them live.
+        # The check runs on a worker thread: a probe touches hardware (a WMI/LHM
+        # read enumerates disks and can take tens of milliseconds or block), and
+        # the GUI thread must never perform unpredictable I/O.  The report comes
+        # back through the bus -> Qt bridge, exactly like telemetry.
+        self._health_worker = HealthCheckWorker(self.services.health.check)
+        self._health_worker.start()
+        self._health_timer = QTimer(self)
+        self._health_timer.setInterval(HEALTH_INTERVAL_MS)
+        self._health_timer.timeout.connect(self._health_worker.request)
+        self._health_timer.start()
+        self._health_worker.request()
+
         last = services.config.window.selected_page or "dashboard"
         self.show_page(last if last in PAGE_CLASSES else "dashboard")
 
@@ -154,6 +176,7 @@ class MainWindow(QMainWindow):
             accent=appearance.accent,
             animation=appearance.animation_level,
             show_glow=appearance.show_glow,
+            performance=self.services.config.performance.mode,
         )
 
     def _app_icon(self) -> QIcon:
@@ -281,13 +304,24 @@ class MainWindow(QMainWindow):
                 TOPIC_SNAPSHOT,
                 TOPIC_ALERT,
                 TOPIC_ALERT_CLEARED,
+                TOPIC_NOTIFY,
                 TOPIC_HEALTH,
                 TOPIC_CONNECTION,
                 TOPIC_SESSIONS,
                 TOPIC_MODE,
-            }
+                TOPIC_DISCOVERY,
+            },
+            # Only the visual snapshot may coalesce: it is pure display state and
+            # a newer one fully supersedes an older one.  Alerts, connection
+            # state, sessions and health are never dropped (see AD-3).
+            coalesce={TOPIC_SNAPSHOT},
         )
         self._bridge.received.connect(self._on_bus_event)
+        # If discovery is still running (started in the background), show an
+        # explicit initialising state instead of a stale "no hardware" message.
+        if not self.services.discovery_finished:
+            self.rail.set_health(HealthStatus.UNKNOWN)
+            self.status.set_backend("initialising")
 
     def _on_bus_event(self, event: Event) -> None:
         """Dispatch a bus event on the GUI thread."""
@@ -296,6 +330,8 @@ class MainWindow(QMainWindow):
             self._on_snapshot(event)
         elif topic in (TOPIC_ALERT, TOPIC_ALERT_CLEARED):
             self._on_alert(event)
+        elif topic == TOPIC_NOTIFY:
+            self._show_notification(event.payload)
         elif topic == TOPIC_HEALTH:
             self._on_health(event)
         elif topic == TOPIC_CONNECTION:
@@ -304,6 +340,27 @@ class MainWindow(QMainWindow):
             self._on_session(event)
         elif topic == TOPIC_MODE:
             self._on_mode(event)
+        elif topic == TOPIC_DISCOVERY:
+            self._on_discovery(event)
+
+    def _on_discovery(self, event: Event) -> None:
+        """Hardware discovery finished on the worker thread — update the UI."""
+        result = event.payload
+        if isinstance(result, dict) and result.get("error"):
+            self.status.set_backend("unavailable")
+            self.rail.set_health(HealthStatus.ERROR)
+            self._health_worker.request()
+            return
+        selected = getattr(result, "selected", None)
+        name = selected.value if selected is not None else "none"
+        simulated = bool(self.services.simulation_enabled)
+        self.status.set_backend(name, simulated=simulated)
+        self._health_worker.request()
+        page = self._pages.get("dashboard")
+        if page is not None:
+            handler = getattr(page, "on_discovery", None)
+            if callable(handler):
+                handler(result)
 
     def _on_snapshot(self, event: Event) -> None:
         snapshot: TelemetrySnapshot = event.payload
@@ -321,6 +378,30 @@ class MainWindow(QMainWindow):
         snapshot = self.services.telemetry.last_snapshot
         if page is not None and snapshot is not None:
             page.on_snapshot(snapshot)
+
+    def _show_notification(self, alert: object) -> None:
+        """Show a desktop notification for a raised alert.
+
+        The alert service decides *whether* a notification is due (its severity
+        and the Windows-notifications setting); the shell decides *how* it is
+        delivered.  A tray balloon is the portable choice on Windows: the
+        installed build always has a tray icon, whereas ``QSystemTrayIcon``
+        ``showMessage`` needs nothing extra.
+        """
+        if not self.tray.isVisible():
+            return
+        title = getattr(alert, "title", None)
+        body = getattr(alert, "message", None) or title
+        severity = getattr(alert, "severity", None)
+        icon = QSystemTrayIcon.MessageIcon.Critical
+        if severity is not None and getattr(severity, "value", "") == "warning":
+            icon = QSystemTrayIcon.MessageIcon.Warning
+        self.tray.showMessage(
+            str(title or APP_NAME),
+            str(body or ""),
+            icon,
+            8000,
+        )
 
     def _on_health(self, event: Event) -> None:
         report = event.payload
@@ -700,6 +781,10 @@ class MainWindow(QMainWindow):
         self._shutting_down = True
         self._save_window_state()
         self.animations.stop_all()
+        with contextlib.suppress(Exception):
+            self._health_timer.stop()
+        with contextlib.suppress(Exception):
+            self._health_worker.stop()
         with contextlib.suppress(Exception):
             self._bridge.detach()
         for page in list(self._pages.values()):

@@ -22,9 +22,40 @@ _DATE_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 _MAX_BYTES = 2 * 1024 * 1024
 _BACKUP_COUNT = 5
 
+#: The credential key names we treat as secret-bearing.  Kept explicit (rather
+#: than a bare ``key``) so ordinary text like "the shortcut key" is untouched.
+_SECRET_NAMES = (
+    r"hmac[_\-]?key|secret[_\-]?key|secret|passphrase|password|passwd|pwd|"
+    r"token|api[_\-]?key|api[_\-]?secret|access[_\-]?key|access[_\-]?token|"
+    r"client[_\-]?secret|private[_\-]?key|pairing[_\-]?code|session[_\-]?token|"
+    r"credential[s]?|auth[_\-]?token"
+)
+
 #: Patterns for values that must never reach a log file.
 _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"(?i)(hmac[_\-]?key|secret|password|token|api[_\-]?key)\s*[:=]\s*\S+"), r"\1=<redacted>"),
+    # PEM private keys, possibly spanning several lines.
+    (
+        re.compile(
+            r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+            re.DOTALL,
+        ),
+        "<redacted-private-key>",
+    ),
+    # A quoted key and a quoted value — the shape JSON/YAML/dict-repr secrets
+    # take, e.g. ``"token": "abcdef"``.  The earlier "key[:=]value" rule missed
+    # these (the quote between the key and the colon defeated it), which leaked
+    # credentials into logs and support bundles.
+    (
+        re.compile(
+            rf"(?i)([\"']?(?:{_SECRET_NAMES})[\"']?\s*[:=]\s*)([\"'])([^\"'\n]{{0,200}})(\2)"
+        ),
+        r"\1\2<redacted>\4",
+    ),
+    # An unquoted key and value, e.g. ``token=abc`` or ``api_key: sk-live``.
+    (
+        re.compile(rf"(?i)({_SECRET_NAMES})\s*[:=]\s*\S+"),
+        r"\1=<redacted>",
+    ),
     (re.compile(r"(?i)authorization:\s*\S+.*"), "authorization: <redacted>"),
     (re.compile(r"\b[0-9a-fA-F]{32,}\b"), "<redacted-hex>"),
     (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]+"), "Bearer <redacted>"),

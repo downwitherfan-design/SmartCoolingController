@@ -186,6 +186,16 @@ QPushButton[segmented="true"] {{
     padding: {s['xs']}px {s['md']}px;
     min-height: 26px;
 }}
+/* Icon-only buttons (pin, favourite, chart pause).  The base rule's
+   min-height + padding form a box model that a stylesheet computes *after*
+   setFixedSize, so a 24x24 icon button would otherwise lay out ~48px tall and
+   overlap the content beneath it.  Clearing the box model here lets the
+   widget's own fixed size stand. */
+QPushButton[iconOnly="true"] {{
+    min-height: 0px;
+    min-width: 0px;
+    padding: 0px;
+}}
 
 QToolButton {{
     background: transparent;

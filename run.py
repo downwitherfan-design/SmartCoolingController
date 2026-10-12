@@ -428,7 +428,11 @@ def main(argv: list[str] | None = None) -> int:
     from app.ui.shell import create_window
 
     try:
-        services.start(simulate=simulate)
+        # Real hardware discovery can block for a long time opening WMI/LHM;
+        # run it in the background so the window paints immediately and shows an
+        # "initialising" state instead of freezing.  Smoke/safe runs stay
+        # synchronous so their output is deterministic.
+        services.start(simulate=simulate, background_discovery=not simulate)
     except Exception as exc:  # report, then continue degraded
         log.exception("failed to start services")
         if not args.headless:

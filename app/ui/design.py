@@ -36,6 +36,7 @@ from app.core.enums import (
     FanState,
     HealthStatus,
     MetricState,
+    PerformanceMode,
     ThemeMode,
     ThermalState,
 )
@@ -213,6 +214,9 @@ class Theme:
     animation: AnimationLevel = AnimationLevel.NORMAL
     show_glow: bool = True
     reduced: bool = False
+    #: Lightweight performance mode: trade rendering fidelity for throughput
+    #: (no antialiasing, downsampled + clipped traces) on older hardware.
+    lightweight: bool = False
     _thermal: dict[ThermalState, str] = field(default_factory=dict, repr=False)
 
     # -- colour helpers ----------------------------------------------------
@@ -345,6 +349,7 @@ def build_theme(
     accent: str = "cyan",
     animation: AnimationLevel = AnimationLevel.NORMAL,
     show_glow: bool = True,
+    performance: PerformanceMode = PerformanceMode.NORMAL,
 ) -> Theme:
     """Create a :class:`Theme` from user configuration."""
     palette = LIGHT if mode is ThemeMode.LIGHT else DARK
@@ -352,12 +357,19 @@ def build_theme(
     base, hover, pressed, soft = ACCENTS[key]
     palette = palette.with_accent(base, hover, pressed, soft)
     reduced = animation is AnimationLevel.OFF
+    lightweight = performance is PerformanceMode.LIGHTWEIGHT
+    # Lightweight mode promises less motion as well as less chart detail, so
+    # cap the motion at LOW unless the user turned animation off entirely.
+    effective_animation = (
+        AnimationLevel.LOW if lightweight and not reduced else animation
+    )
     return Theme(
         palette=palette,
         accent=key,
-        animation=animation,
+        animation=effective_animation,
         show_glow=show_glow,
         reduced=reduced,
+        lightweight=lightweight,
     )
 
 

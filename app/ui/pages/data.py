@@ -22,29 +22,25 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QPushButton,
-    QVBoxLayout,
-    QWidget,
 )
 
 from app.core.enums import ExportFormat
 from app.models.telemetry import TelemetrySnapshot
 from app.ui.design import SPACE
-from app.ui.pages.base import Page
+from app.ui.pages.base import ScrollPage
 from app.ui.widgets.atoms import KeyValueRow, SectionHeader, StatusBadge
 from app.ui.widgets.forms import FormCard
 
 
-class DataPage(Page):
+class DataPage(ScrollPage):
     key = "data"
     title_key = "data.title"
     subtitle_key = "data.subtitle"
     icon_name = "storage"
     wants_snapshots = False
 
-    def _build_content(self, content: QWidget) -> None:
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(SPACE["xl"], SPACE["lg"], SPACE["xl"], SPACE["xl"])
-        layout.setSpacing(SPACE["lg"])
+    def build_body(self) -> None:
+        layout = self.body
 
         layout.addWidget(SectionHeader(self.tr_.t("data.title"), self.tr_.t("data.subtitle")))
 

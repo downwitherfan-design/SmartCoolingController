@@ -20,12 +20,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QVBoxLayout,
-    QWidget,
 )
 
 from app.models.telemetry import TelemetrySnapshot
 from app.ui.design import SPACE
-from app.ui.pages.base import Page
+from app.ui.pages.base import ScrollPage
 from app.ui.widgets.atoms import (
     Card,
     ConnectionBadge,
@@ -36,7 +35,7 @@ from app.ui.widgets.atoms import (
 )
 
 
-class Esp32Page(Page):
+class Esp32Page(ScrollPage):
     key = "esp32"
     title_key = "esp32.title"
     subtitle_key = "esp32.subtitle"
@@ -45,12 +44,10 @@ class Esp32Page(Page):
     #: Emitted from the discovery worker thread with the devices it found.
     _discovered = Signal(object)
 
-    def _build_content(self, content: QWidget) -> None:
+    def build_body(self) -> None:
         self._discovering = False
         self._discovered.connect(self._on_discovered)
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(SPACE["xl"], SPACE["lg"], SPACE["xl"], SPACE["xl"])
-        layout.setSpacing(SPACE["lg"])
+        layout = self.body
 
         header = QHBoxLayout()
         header.addWidget(SectionHeader(self.tr_.t("esp32.title"), self.tr_.t("esp32.subtitle")), 1)

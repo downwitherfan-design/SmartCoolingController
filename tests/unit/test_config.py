@@ -111,3 +111,46 @@ def test_window_state_defaults_are_valid() -> None:
     window = AppConfig().window
     assert window.width > 0 and window.height > 0
     assert window.selected_page
+
+
+# ---------------------------------------------------------------------------
+# Dead settings were removed, not left as no-op switches (V2.1 config audit).
+#
+# Settings that persist and render but change nothing are worse than absent:
+# they imply a capability the app does not have.  These guards keep the four
+# removed fields from creeping back without a real implementation, and prove
+# that a config file written by an older build still loads (``extra="ignore"``).
+# ---------------------------------------------------------------------------
+
+
+def test_removed_appearance_settings_stay_removed() -> None:
+    appearance = AppConfig().appearance
+    for field in ("dashboard_preset", "view_mode", "hidden_cards", "card_order"):
+        assert not hasattr(appearance, field), f"{field} reappeared without a consumer"
+
+
+def test_removed_telemetry_setting_stays_removed() -> None:
+    assert not hasattr(AppConfig().telemetry, "sensor_refresh_interval_s")
+
+
+def test_config_with_removed_keys_still_loads(tmp_path: Path) -> None:
+    config_dir = tmp_path / "Config"
+    config_dir.mkdir(parents=True)
+    legacy = {
+        "telemetry": {"sensor_refresh_interval_s": 120, "sample_interval_ms": 1000},
+        "appearance": {
+            "dashboard_preset": "power",
+            "view_mode": "advanced",
+            "hidden_cards": ["battery"],
+            "card_order": ["cpu", "gpu"],
+            "accent": "amber",
+        },
+    }
+    (config_dir / "settings.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+    config = ConfigStore(config_dir).load()
+    # The still-valid neighbours survive; the removed keys are simply ignored.
+    assert config.telemetry.sample_interval_ms == 1000
+    assert config.appearance.accent == "amber"
+    assert not hasattr(config.appearance, "dashboard_preset")
+

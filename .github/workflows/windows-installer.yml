@@ -84,6 +84,24 @@ jobs:
           Copy-Item "build/delivery/checksums.sha256" out/ -ErrorAction SilentlyContinue
           Get-ChildItem out | Format-Table Name, Length
 
+      - name: Verify the installer is in the checksums file
+        shell: pwsh
+        run: |
+          # RELEASE_NOTES.md tells the user to verify the setup.exe against
+          # checksums.sha256.  v2.0.0 shipped that file without the installer,
+          # so the verification was impossible; fail the release if a future
+          # change reintroduces the omission.
+          $checksums = Get-Content "out/checksums.sha256" -Raw
+          if ($checksums -notmatch 'SmartCoolingController-.*-setup\.exe') {
+            throw "checksums.sha256 does not list the setup.exe"
+          }
+          $installer = Get-ChildItem "out/SmartCoolingController-*-setup.exe" | Select-Object -First 1
+          $digest = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower()
+          if ($checksums -notmatch [regex]::Escape($digest)) {
+            throw "checksums.sha256 does not contain the installer's real digest"
+          }
+          Write-Host "checksums.sha256 lists the installer with the correct digest."
+
       - name: Upload the installer and portable bundle
         uses: actions/upload-artifact@v4
         with:

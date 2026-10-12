@@ -340,11 +340,9 @@ _EN: dict[str, str] = {
     "settings.auto_backup": "Back up before migration",
     "settings.auto_backup_days": "Automatic backup interval",
     "settings.accent_hint": "Accent is used for interactive and live elements.",
-    "settings.dashboard_preset": "Dashboard preset",
     "settings.compact_opacity": "Compact opacity",
     "settings.compact_on_top": "Compact always on top",
     "settings.compact_lock": "Lock compact position",
-    "settings.view_mode": "Default view",
     "settings.performance_mode": "Performance mode",
     "settings.performance_hint": "Lightweight reduces animation and chart detail on older hardware.",
     "settings.developer_mode": "Developer diagnostics",
@@ -358,11 +356,6 @@ _EN: dict[str, str] = {
     "settings.confirm_exit": "Confirm on exit",
     "settings.reset": "Reset to defaults",
     "settings.saved": "Saved",
-    "settings.preset.standard": "Standard",
-    "settings.preset.minimal": "Minimal",
-    "settings.preset.power": "Power user",
-    "settings.view.simple": "Simple",
-    "settings.view.advanced": "Advanced",
     "settings.level.debug": "Debug",
     "settings.level.info": "Info",
     "settings.level.warning": "Warning",
@@ -441,6 +434,9 @@ _EN: dict[str, str] = {
     "conn.unauthorized": "Unauthorized",
     "conn.protocol_mismatch": "Protocol mismatch",
     "conn.error": "Error",
+    "conn.discovering": "Discovering",
+    "conn.reconnecting": "Reconnecting",
+    "conn.stopping": "Stopping",
     "fan.state.stopped": "Stopped",
     "fan.state.starting": "Starting",
     "fan.state.running": "Running",
@@ -848,6 +844,9 @@ _FA: dict[str, str] = {
     "conn.unauthorized": "غیرمجاز",
     "conn.protocol_mismatch": "ناسازگاری پروتکل",
     "conn.error": "خطا",
+    "conn.discovering": "در حال جست‌وجو",
+    "conn.reconnecting": "در حال اتصال مجدد",
+    "conn.stopping": "در حال توقف",
     "fan.state.stopped": "متوقف",
     "fan.state.starting": "در حال راه‌اندازی",
     "fan.state.running": "در حال کار",
@@ -931,11 +930,9 @@ _FA: dict[str, str] = {
     "settings.auto_backup": "پشتیبان‌گیری پیش از مهاجرت",
     "settings.auto_backup_days": "بازه پشتیبان‌گیری خودکار",
     "settings.accent_hint": "رنگ تأکید برای عناصر تعاملی و زنده به‌کار می‌رود.",
-    "settings.dashboard_preset": "چیدمان داشبورد",
     "settings.compact_opacity": "شفافیت حالت فشرده",
     "settings.compact_on_top": "حالت فشرده همیشه رو",
     "settings.compact_lock": "قفل جای حالت فشرده",
-    "settings.view_mode": "نمای پیش‌فرض",
     "settings.performance_mode": "حالت کارایی",
     "settings.performance_hint": "حالت سبک انیمیشن و جزئیات نمودار را روی سخت‌افزار قدیمی کم می‌کند.",
     "settings.developer_mode": "عیب‌یابی توسعه‌دهنده",
@@ -949,11 +946,6 @@ _FA: dict[str, str] = {
     "settings.confirm_exit": "تأیید هنگام خروج",
     "settings.reset": "بازنشانی به پیش‌فرض",
     "settings.saved": "ذخیره شد",
-    "settings.preset.standard": "استاندارد",
-    "settings.preset.minimal": "حداقلی",
-    "settings.preset.power": "حرفه‌ای",
-    "settings.view.simple": "ساده",
-    "settings.view.advanced": "پیشرفته",
     "settings.level.debug": "اشکال‌زدایی",
     "settings.level.info": "اطلاع",
     "settings.level.warning": "هشدار",
@@ -1039,7 +1031,7 @@ class Translator:
     """Runtime translator with locale-aware number formatting."""
 
     def __init__(self, language: Language = Language.ENGLISH) -> None:
-        self._language = language
+        self._language = _coerce_language(language)
 
     @property
     def language(self) -> Language:
@@ -1050,7 +1042,7 @@ class Translator:
         return self._language is Language.PERSIAN
 
     def set_language(self, language: Language) -> None:
-        self._language = language
+        self._language = _coerce_language(language)
 
     def t(self, key: str, **params: object) -> str:
         """Translate ``key``; unknown keys return the key itself."""
@@ -1073,6 +1065,22 @@ class Translator:
         if self._language is Language.PERSIAN:
             text = text.translate(str.maketrans("0123456789,", "۰۱۲۳۴۵۶۷۸۹٬"))
         return text
+
+
+def _coerce_language(language: Language | str) -> Language:
+    """Normalise ``language`` to a :class:`Language`.
+
+    Callers throughout the codebase pass ``"en"``/``"fa"`` string literals.
+    Because :class:`Language` is a ``StrEnum`` those compare equal by value, but
+    identity checks (``is``) would fail — so every entry point coerces here and
+    the rest of the class may rely on identity.
+    """
+    if isinstance(language, Language):
+        return language
+    try:
+        return Language(str(language).strip().lower())
+    except ValueError:
+        return Language.ENGLISH
 
 
 __all__ = ["Translator", "TOPIC_LANGUAGE"]

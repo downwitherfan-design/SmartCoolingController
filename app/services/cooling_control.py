@@ -120,6 +120,15 @@ class CoolingController:
         self._last_update_at: datetime | None = None
         self._apply_command = apply_command
         self._last_decision: CoolingDecision | None = None
+        #: True while a one-shot ``setPwm`` has taken manual authority from the
+        #: firmware (a SAFE-mode or critical-temperature override).  The next
+        #: automatic update hands authority back with an explicit ``setMode AUTO``
+        #: so a recovered controller resumes following our recommendations.
+        self._authority_manual = False
+        #: Last duty actually sent with ``setPwm``; used to avoid re-sending an
+        #: unchanged override on every snapshot while still re-asserting it after
+        #: authority was returned to the firmware.
+        self._last_forced_pwm: float | None = None
 
     # -- configuration -----------------------------------------------------
 
@@ -139,6 +148,21 @@ class CoolingController:
     def last_decision(self) -> CoolingDecision | None:
         return self._last_decision
 
+    def recommended_pwm(self) -> float | None:
+        """The duty to advertise to the firmware in automatic mode, if any.
+
+        Returns ``None`` unless the controller is enabled, has a profile and is
+        in AUTO — i.e. exactly when the firmware owns the fan and should follow
+        our recommendation.  In every other mode the desktop has taken explicit
+        control (SAFE/critical via a ``setPwm`` command, MANUAL via the user,
+        OFF via ``stop``), so no recommendation is advertised.
+        """
+        if not self._enabled or self._profile is None:
+            return None
+        if self._mode is not ControllerMode.AUTO or self._target is None:
+            return None
+        return self._target
+
     def set_apply_command(self, apply_command: object | None) -> None:
         """Register ``apply_command(command: str, **kwargs)`` (the connection manager)."""
         self._apply_command = apply_command
@@ -153,10 +177,15 @@ class CoolingController:
         if mode is self._mode:
             return
         self._mode = mode
+        self._authority_manual = False
+        self._last_forced_pwm = None
         self._bus.publish(TOPIC_MODE, {"mode": mode})
         if mode is ControllerMode.MANUAL:
+            pwm = round(self._manual_pwm, 1)
+            self._authority_manual = True
+            self._last_forced_pwm = pwm
             self._command("setMode", mode=ControllerMode.MANUAL.value)
-            self._command("setPwm", pwm=self._manual_pwm)
+            self._command("setPwm", pwm=pwm)
         else:
             self._command("setMode", mode=mode.value)
 
@@ -165,6 +194,10 @@ class CoolingController:
         self._enabled = enabled
         if not enabled:
             self._target = 0.0
+            # ``stop`` takes the fan to zero, so any remembered override duty is
+            # now stale; clearing it lets the next override re-command even if it
+            # happens to use the same value.
+            self._last_forced_pwm = None
             self._command("stop")
         else:
             self._command("setMode", mode=self._mode.value)
@@ -177,7 +210,9 @@ class CoolingController:
         self._manual_pwm = clamp(pwm, 0.0, 100.0)
         if self._mode is ControllerMode.MANUAL:
             self._target = self._manual_pwm
-            self._command("setPwm", pwm=self._target)
+            self._authority_manual = True
+            self._last_forced_pwm = round(self._manual_pwm, 1)
+            self._command("setPwm", pwm=self._manual_pwm)
 
     # -- control loop ------------------------------------------------------
 
@@ -198,7 +233,7 @@ class CoolingController:
                 "Safe mode — running the fan at maximum",
                 safety_override=True,
             )
-            self._apply(decision)
+            self._force_manual(decision)
             return self._emit(decision)
 
         if self._mode is ControllerMode.CALIBRATION:
@@ -215,7 +250,7 @@ class CoolingController:
             decision = self._clamp_and_emit(
                 self._manual_pwm, previous, "Manual override", safety_override=False
             )
-            self._apply(decision)
+            self._force_manual(decision)
             return self._emit(decision)
 
         # Automatic mode.
@@ -231,7 +266,7 @@ class CoolingController:
                 weighted_input_c=snapshot.thermal.weighted_input_c,
             )
             self._target = decision.target_pwm
-            self._apply(decision)
+            self._force_manual(decision)
             return self._emit(decision)
 
         if self._profile is None:
@@ -271,6 +306,10 @@ class CoolingController:
         )
         decision = self._rate_limit(decision, snapshot)
         self._detect_stall(snapshot, decision)
+        # The software is now safely below critical, so hand authority back to
+        # the firmware if an override had taken it; the duty travels as the
+        # recommendation in the next telemetry packet.
+        self._restore_firmware_auto()
         return self._emit(decision)
 
     # -- helpers -----------------------------------------------------------
@@ -296,6 +335,12 @@ class CoolingController:
     ) -> CoolingDecision:
         low = self._limits.min_pwm
         high = self._limits.max_pwm
+        if safety_override:
+            # A safety override is never subject to the profile envelope: a
+            # profile whose max_pwm is below the emergency duty would otherwise
+            # cap the emergency response.  Only the absolute [0, 100] envelope
+            # applies, and the firmware remains the final authority (spec §47).
+            low, high = 0.0, 100.0
         clamped_value = clamp(desired, low, high)
         clamped_value = clamp(clamped_value, 0.0, 100.0)
         return CoolingDecision(
@@ -357,9 +402,40 @@ class CoolingController:
                 },
             )
 
-    def _apply(self, decision: CoolingDecision) -> None:
-        if self._mode is ControllerMode.AUTO:
-            self._command("setPwm", pwm=round(decision.target_pwm, 1))
+    def _force_manual(self, decision: CoolingDecision) -> None:
+        """Take manual authority and command an exact duty (SAFE/manual/critical).
+
+        A ``setPwm`` is the only thing that can override firmware automatic
+        control, which is exactly what a safety override and a deliberate manual
+        setting require.  The previous guard only sent it when the *desktop*
+        mode was AUTO, which inverted the intent: the emergency response, the
+        manual slider and the critical-temperature override all ran while the
+        desktop was in SAFE/MANUAL — the very cases that were silenced, so the
+        fan never actually moved.
+
+        The command is sent only when the duty changes or the firmware has since
+        regained automatic authority, so a steady override does not flood the
+        link while a genuine change is never dropped.
+        """
+        pwm = round(decision.target_pwm, 1)
+        if self._authority_manual and self._last_forced_pwm == pwm:
+            return
+        self._authority_manual = True
+        self._last_forced_pwm = pwm
+        self._command("setPwm", pwm=pwm)
+
+    def _restore_firmware_auto(self) -> None:
+        """Return fan authority to the firmware after an override, once.
+
+        Sent only if an override had taken manual authority, so the steady-state
+        automatic loop does not spam ``setMode AUTO`` every half second; the fan
+        duty is carried by the ``recommendedPwm`` field of the telemetry packet.
+        """
+        if not self._authority_manual:
+            return
+        self._authority_manual = False
+        self._last_forced_pwm = None
+        self._command("setMode", mode=ControllerMode.AUTO.value)
 
     def _command(self, command: str, **kwargs: object) -> None:
         applier = self._apply_command

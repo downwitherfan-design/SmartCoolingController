@@ -390,3 +390,94 @@ def test_verify_frozen_survives_non_utf8_child_output(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert result.stdout is not None  # no UnicodeDecodeError -> None
     assert "SmartCooling" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Release integrity: the installer must be checksummed.
+#
+# v2.0.0 shipped checksums.sha256 that listed the zips but not the setup.exe,
+# while RELEASE_NOTES.md told the user to verify the setup.exe against that
+# file.  The verification step was impossible.  These tests pin the invariant.
+# ---------------------------------------------------------------------------
+
+
+def test_installer_checksum_lines_hashes_a_present_installer(tmp_path: Path) -> None:
+    installer = tmp_path / "SmartCoolingController-9.9.9-setup.exe"
+    _write(installer, b"installer-bytes")
+    lines = deliver._installer_checksum_lines(installer)
+    assert len(lines) == 1
+    digest, name = lines[0].split("  ")
+    assert name == installer.name
+    assert len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)
+    assert digest == deliver.sha256(installer)
+
+
+def test_installer_checksum_lines_is_empty_without_an_installer() -> None:
+    assert deliver._installer_checksum_lines(None) == []
+
+
+def test_find_installer_prefers_the_matching_version(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    build = tmp_path / "build"
+    (build / "installer").mkdir(parents=True)
+    _write(build / "installer" / "SmartCoolingController-1.0.0-setup.exe", b"old")
+    wanted = build / "installer" / "SmartCoolingController-2.0.0-setup.exe"
+    _write(wanted, b"new")
+    monkeypatch.setattr(deliver, "BUILD", build)
+
+    assert deliver._find_installer("2.0.0") == wanted
+
+
+def test_find_installer_returns_none_when_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(deliver, "BUILD", tmp_path / "build")
+    assert deliver._find_installer("2.0.0") is None
+
+
+def test_delivery_main_checksums_the_installer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """End-to-end: with an installer present, `main` lists it in checksums."""
+    build = tmp_path / "build"
+    delivery = build / "delivery"
+    bundle = build / "dist" / "SmartCoolingController"
+    bundle.mkdir(parents=True)
+    _write(bundle / "SmartCoolingController.exe", b"frozen")
+    (build / "installer").mkdir(parents=True)
+    installer = build / "installer" / "SmartCoolingController-2.0.0-setup.exe"
+    _write(installer, b"installer-bytes")
+    _write(build / "RELEASE_NOTES.md", b"notes")
+
+    root = tmp_path / "root"
+    root.mkdir()
+    _write(root / "run.py", b"print('hi')")
+    monkeypatch.setattr(deliver, "ROOT", root)
+    monkeypatch.setattr(deliver, "BUILD", build)
+    monkeypatch.setattr(deliver, "DELIVERY", delivery)
+    monkeypatch.setattr(deliver, "BUNDLE", bundle)
+    monkeypatch.setattr(deliver, "build_info", lambda *, release=False: _FakeInfo())
+    monkeypatch.setattr(deliver, "_install_guide", lambda *a, **k: "guide")
+
+    assert deliver.main([]) == 0
+    text = (delivery / "checksums.sha256").read_text(encoding="utf-8")
+    assert installer.name in text
+    assert deliver.sha256(installer) in text
+
+
+class _FakeInfo:
+    version = "2.0.0"
+    build_id = "test-build"
+    protocol_version = 1
+
+
+def test_windows_installer_workflow_verifies_the_installer_checksum() -> None:
+    # The v2.0.0 defect: the release told users to verify setup.exe against
+    # checksums.sha256, which did not list it.  CI must fail if that recurs.
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    assert "Verify the installer is in the checksums file" in text
+    assert "checksums.sha256" in text
+    assert "Get-FileHash" in text
+
+

@@ -13,30 +13,27 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QVBoxLayout,
-    QWidget,
 )
 
 from app.core.enums import AlertSeverity
 from app.models.alerts import AlertEvent
 from app.models.telemetry import TelemetrySnapshot
 from app.ui.design import SPACE
-from app.ui.pages.base import Page
+from app.ui.pages.base import ScrollPage
 from app.ui.widgets.atoms import AlertItem, Card, EmptyState, SectionHeader, StatusBadge
 
 TOPIC_ALERT = "alerts.raised"
 TOPIC_ALERT_CLEARED = "alerts.cleared"
 
 
-class AlertsPage(Page):
+class AlertsPage(ScrollPage):
     key = "alerts"
     title_key = "alerts.title"
     subtitle_key = "alerts.subtitle"
     icon_name = "alerts"
 
-    def _build_content(self, content: QWidget) -> None:
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(SPACE["xl"], SPACE["lg"], SPACE["xl"], SPACE["xl"])
-        layout.setSpacing(SPACE["lg"])
+    def build_body(self) -> None:
+        layout = self.body
 
         header = QHBoxLayout()
         header.addWidget(SectionHeader(self.tr_.t("alerts.title"), self.tr_.t("alerts.subtitle")), 1)

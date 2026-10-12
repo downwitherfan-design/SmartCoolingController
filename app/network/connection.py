@@ -212,24 +212,38 @@ class ConnectionManager:
         heartbeat_interval_s: float = 1.0,
         heartbeat_timeout_s: float = 3.0,
         connect_timeout_s: float = 5.0,
+        send_interval_s: float = 0.5,
         backoff_schedule: list[float] | None = None,
         reconnect_jitter: float = 0.25,
         healthy_reset_s: float = 5.0,
         require_authentication: bool = True,
+        stale_after_s: float = STALE_AFTER_S,
     ) -> None:
         self._bus = bus
         self._use_websocket = use_websocket
         self._heartbeat_interval_s = heartbeat_interval_s
         self._heartbeat_timeout_s = heartbeat_timeout_s
         self._connect_timeout_s = connect_timeout_s
+        # Cadence of the telemetry push loop.  A stalled link is already caught
+        # by the heartbeat timeout, so this only decides how often we sample.
+        self._send_interval_s = max(0.05, send_interval_s)
         self._backoff_schedule = backoff_schedule or [1.0, 2.0, 4.0, 8.0, 15.0, 30.0]
         self._reconnect_jitter = max(0.0, min(1.0, reconnect_jitter))
         self._healthy_reset_s = healthy_reset_s
         self._require_auth = require_authentication
+        # The link is "degraded" once packets are late by half the stale window,
+        # and "stale" once they stop for the whole window.  Both scale with the
+        # user's telemetry.stale_after_s setting.
+        self.set_stale_after_s(stale_after_s)
 
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop = threading.Event()
+        #: Wakes the idle/backoff wait the moment ``stop()`` is called.  Without
+        #: it the loop would sit in ``asyncio.sleep`` for up to the longest
+        #: backoff (30 s) and ``stop()`` — which runs on the GUI thread during
+        #: shutdown — would block for that whole time.
+        self._wake: asyncio.Event | None = None
         self._desired: DiscoveredDevice | None = None
         self._device: Esp32Device | None = None
         self._status = Esp32Status()
@@ -319,6 +333,7 @@ class ConnectionManager:
         self._request_disconnect()
         self._set_state(_STOPPING, "", epoch=None)
         self._stop.set()
+        self._signal_stop()
         loop = self._loop
         if loop is not None and loop.is_running():
             mock = self._mock
@@ -393,6 +408,28 @@ class ConnectionManager:
             with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(event.set)
 
+    def _signal_stop(self) -> None:
+        """Wake an idle/backoff wait so ``stop()`` does not block (thread-safe)."""
+        loop = self._loop
+        wake = self._wake
+        if loop is not None and loop.is_running() and wake is not None:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(wake.set)
+
+    async def _wait(self, seconds: float) -> None:
+        """Sleep, but return early when ``stop()`` is signalled.
+
+        Every long wait on the connection loop goes through here so shutdown is
+        bounded by the loop's reaction time (~one event-loop turn), not by the
+        wait itself.
+        """
+        wake = self._wake
+        if wake is None:
+            await asyncio.sleep(seconds)
+            return
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(wake.wait(), timeout=seconds)
+
     # -- commands ----------------------------------------------------------
 
     def send_command(self, command: str, **arguments: object) -> bool:
@@ -413,7 +450,14 @@ class ConnectionManager:
         The server is started on the connection thread's event loop and this
         call does not return until the socket is actually listening, so the
         caller may connect immediately without racing the loop start-up.
+
+        Calling this again replaces the previous mock; the old server is shut
+        down first so its listening socket and simulation tasks cannot leak.
         """
+        previous = self._mock
+        if previous is not None:
+            self._stop_mock(previous)
+
         mock = MockEsp32(host=host, port=port)
         self._mock = mock
         self.start()
@@ -443,6 +487,20 @@ class ConnectionManager:
                 return True
             time.sleep(0.02)
         return False
+
+    def _stop_mock(self, mock: MockEsp32, timeout: float = 5.0) -> None:
+        """Stop ``mock`` on the connection loop and wait for it to close.
+
+        Used when a mock is replaced and during :meth:`stop`, so no listening
+        socket or simulation task can survive its owner.
+        """
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            return
+        with contextlib.suppress(RuntimeError):
+            future = asyncio.run_coroutine_threadsafe(mock.stop(), loop)
+            with contextlib.suppress(Exception):
+                future.result(timeout=timeout)
 
     # -- metrics for the telemetry engine ----------------------------------
 
@@ -519,12 +577,13 @@ class ConnectionManager:
             self._loop = None
 
     async def _run(self) -> None:
+        self._wake = asyncio.Event()
         while not self._stop.is_set():
             with self._lock:
                 target = self._desired
                 want = self._want_connect
             if target is None or not want:
-                await asyncio.sleep(0.2)
+                await self._wait(0.2)
                 continue
 
             attempt_started = time.monotonic()
@@ -569,7 +628,7 @@ class ConnectionManager:
                 self._diag.reconnect_count += 1
             epoch = self._new_epoch()
             self._set_state(_RECONNECTING, f"retrying in {delay:.1f}s", epoch=epoch)
-            await asyncio.sleep(delay)
+            await self._wait(delay)
 
     def _session_was_healthy(self, attempt_started: float) -> bool:
         since = self._healthy_since
@@ -760,7 +819,7 @@ class ConnectionManager:
                     raise
                 except Exception:
                     _log.exception("telemetry push failed")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(self._send_interval_s)
 
     def _oldest_heartbeat_age(self) -> float | None:
         if not self._pending_heartbeats:
@@ -807,15 +866,20 @@ class ConnectionManager:
                     max(0.0, now - self._session_t0) * 1000.0, 2
                 )
 
+        # A peer-reported ERROR means the controller is up but unhealthy; it must
+        # not be overwritten by the generic promotion below in the same call.
+        promote = True
         if packet.message_type in {MessageType.STATUS, MessageType.PAIR_ACK, MessageType.HELLO}:
             self._apply_status(packet)
         elif packet.message_type is MessageType.ERROR:
+            promote = False
             self._set_state(
                 _DEGRADED, str(packet.data.get("message", "error")), epoch=epoch
             )
 
-        # Only a *live* session may declare CONNECTED.
-        if self._state is not ConnectionState.CONNECTED:
+        # Only a *live* session may declare CONNECTED, and only for a packet that
+        # actually carried a usable status.
+        if promote and self._state is not ConnectionState.CONNECTED:
             self._set_state(_CONNECTED, "telemetry", epoch=epoch)
         self._bus.publish(TOPIC_STATUS, self._status)
 
@@ -876,15 +940,36 @@ class ConnectionManager:
             self._lost += min(gap, 1000)
         self._peer_sequence = sequence
 
+    def set_stale_after_s(self, seconds: float) -> None:
+        """Set how long without packets before the link is considered stale.
+
+        The degraded threshold is half the stale window, so the two states
+        always stay ordered for any positive value the user picks.
+        """
+        stale = max(0.5, float(seconds))
+        self._stale_after_s = stale
+        self._degraded_after_s = stale / 2.0
+
+    @property
+    def stale_after_s(self) -> float:
+        return self._stale_after_s
+
+    @property
+    def degraded_after_s(self) -> float:
+        return self._degraded_after_s
+
     def _check_stale(self, epoch: int) -> None:
         last = self._status.last_packet_at
         if last is None:
             return
         age = (utc_now() - last).total_seconds()
-        if age >= STALE_AFTER_S and self._state is not ConnectionState.STALE:
+        if age >= self._stale_after_s and self._state is not ConnectionState.STALE:
             self._set_state(_STALE, "no packets received", epoch=epoch)
             self._status.health = HealthStatus.WARNING
-        elif DEGRADED_AFTER_S <= age < STALE_AFTER_S and self._state is ConnectionState.CONNECTED:
+        elif (
+            self._degraded_after_s <= age < self._stale_after_s
+            and self._state is ConnectionState.CONNECTED
+        ):
             self._set_state(_DEGRADED, "packets delayed", epoch=epoch)
             self._status.health = HealthStatus.WARNING
 

@@ -9,25 +9,23 @@ limits and the desktop application never bypasses it (spec §187).
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout
 
 from app.models.telemetry import TelemetrySnapshot
 from app.ui.design import SPACE
-from app.ui.pages.base import Page
+from app.ui.pages.base import ScrollPage
 from app.ui.widgets.atoms import Card, KeyValueRow, SectionHeader, StatusBadge
 
 
-class AboutPage(Page):
+class AboutPage(ScrollPage):
     key = "about"
     title_key = "about.title"
     subtitle_key = "about.subtitle"
     icon_name = "about"
     wants_snapshots = False
 
-    def _build_content(self, content: QWidget) -> None:
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(SPACE["xl"], SPACE["lg"], SPACE["xl"], SPACE["xl"])
-        layout.setSpacing(SPACE["lg"])
+    def build_body(self) -> None:
+        layout = self.body
 
         hero = Card()
         hero_layout = QHBoxLayout(hero)
